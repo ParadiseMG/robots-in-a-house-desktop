@@ -3,8 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import paradiseRaw from "@/config/paradise.office.json";
 import dontcallRaw from "@/config/dontcall.office.json";
-import type { OfficeConfig, IndicatorKind } from "@/lib/office-types";
-import Office from "@/components/pixi/Office";
+import stationRaw from "@/config/station.json";
+import type {
+  OfficeConfig,
+  StationConfig,
+  IndicatorKind,
+} from "@/lib/office-types";
+import Station from "@/components/pixi/Station";
+import StationMinimap from "@/components/station/StationMinimap";
 import type { Task } from "@/components/tray/TaskTray";
 import RosterTray, { type RosterEntry } from "@/components/roster/RosterTray";
 import AgentInspector from "@/components/inspector/AgentInspector";
@@ -12,70 +18,88 @@ import PromptBar from "@/components/prompt-bar/PromptBar";
 import CommandPalette from "@/components/palette/CommandPalette";
 import UsageTracker from "@/components/usage/UsageTracker";
 import SpriteBubble from "@/components/sprite-bubble/SpriteBubble";
+import MeetingModal from "@/components/war-room/MeetingModal";
+import ChatDock, { DockTabsProvider } from "@/components/dock/ChatDock";
 
-const officesStatic: Record<string, OfficeConfig> = {
+const offices: Record<string, OfficeConfig> = {
   paradise: paradiseRaw as OfficeConfig,
   dontcall: dontcallRaw as OfficeConfig,
 };
+const station = stationRaw as StationConfig;
 const order = ["paradise", "dontcall"] as const;
 type OfficeSlug = (typeof order)[number];
 
 const ROSTER_POLL_MS = 5_000;
 
 export default function Home() {
-  const [slug, setSlug] = useState<OfficeSlug>("paradise");
-  // office: the static config for the current slug.
-  // Desk positions are mutated in-place by the PixiJS drag handler (via onAgentMove →
-  // in-canvas mutation of officesStatic[slug].desks entries) so they persist for the
-  // session without remounting the canvas. The API writes to disk for next-reload persistence.
-  const office: OfficeConfig = officesStatic[slug];
-  const other: OfficeSlug = slug === "paradise" ? "dontcall" : "paradise";
+  // The office whose sidebar + roster data is shown. Always a real slug (never null).
+  const [sidebarSlug, setSidebarSlug] = useState<OfficeSlug>("paradise");
+  // Whether the Pixi camera is focused on a module or in overview.
+  // null = overview (camera fits both modules), string = slug of focused module.
+  const [focusedModule, setFocusedModule] = useState<OfficeSlug | null>(null);
 
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [loadingTasks, setLoadingTasks] = useState(false);
   const [selectedDeskId, setSelectedDeskId] = useState<string | null>(null);
   const [inspectorBump, setInspectorBump] = useState(0);
-  const [hydrated, setHydrated] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
 
-  const [rosterEntries, setRosterEntries] = useState<RosterEntry[] | null>(null);
+  const [rosterEntries, setRosterEntries] = useState<RosterEntry[] | null>(
+    null,
+  );
   const [bubble, setBubble] = useState<{
     deskId: string;
+    officeSlug: OfficeSlug;
     x: number;
     y: number;
     mode: "task" | "reply";
     runId?: string | null;
   } | null>(null);
+  const [meetingOpen, setMeetingOpen] = useState<{ officeSlug: OfficeSlug } | null>(null);
 
-  // Restore slug + desk selection from localStorage on mount
+  // Restore sidebar slug + desk selection from localStorage on mount
   useEffect(() => {
-    const storedSlug = localStorage.getItem("ri-office") as OfficeSlug | null;
-    if (storedSlug === "paradise" || storedSlug === "dontcall") {
-      setSlug(storedSlug);
-      const storedDesk = localStorage.getItem(`ri-desk-${storedSlug}`);
+    const stored = localStorage.getItem("ri-office") as OfficeSlug | null;
+    if (stored === "paradise" || stored === "dontcall") {
+      setSidebarSlug(stored);
+      const storedDesk = localStorage.getItem(`ri-desk-${stored}`);
       if (storedDesk) setSelectedDeskId(storedDesk);
     }
-    setHydrated(true);
+    const storedFocus = localStorage.getItem(
+      "ri-focus",
+    ) as OfficeSlug | "overview" | null;
+    if (storedFocus === "paradise" || storedFocus === "dontcall") {
+      setFocusedModule(storedFocus);
+    }
   }, []);
 
-  const selectOffice = useCallback((next: OfficeSlug) => {
-    localStorage.setItem("ri-office", next);
-    const storedDesk = localStorage.getItem(`ri-desk-${next}`);
-    setSelectedDeskId(storedDesk ?? null);
-    setSlug(next);
+  const focusModule = useCallback((slug: OfficeSlug | null) => {
+    setFocusedModule(slug);
+    localStorage.setItem("ri-focus", slug ?? "overview");
+    if (slug) {
+      setSidebarSlug(slug);
+      localStorage.setItem("ri-office", slug);
+      const storedDesk = localStorage.getItem(`ri-desk-${slug}`);
+      setSelectedDeskId(storedDesk ?? null);
+    }
     setBubble(null);
   }, []);
 
   const selectDesk = useCallback(
-    (deskId: string | null) => {
+    (deskId: string | null, officeSlug?: OfficeSlug) => {
+      const slug = officeSlug ?? sidebarSlug;
+      if (deskId) {
+        setSidebarSlug(slug);
+        localStorage.setItem("ri-office", slug);
+        localStorage.setItem(`ri-desk-${slug}`, deskId);
+      } else {
+        localStorage.removeItem(`ri-desk-${sidebarSlug}`);
+      }
       setSelectedDeskId(deskId);
-      if (deskId) localStorage.setItem(`ri-desk-${slug}`, deskId);
-      else localStorage.removeItem(`ri-desk-${slug}`);
     },
-    [slug],
+    [sidebarSlug],
   );
 
-  // Toggle grid overlay with G key (case-insensitive, ignore when typing in input/textarea)
+  // G toggles grid overlay
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== "g") return;
@@ -87,32 +111,34 @@ export default function Home() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  // Fetch tasks whenever office changes
+  // Fetch tasks for sidebar office
   useEffect(() => {
     let alive = true;
-    setLoadingTasks(true);
     (async () => {
-      const tRes = await fetch(`/api/tasks?office=${slug}`).then((r) => r.json());
+      const tRes = await fetch(`/api/tasks?office=${sidebarSlug}`).then((r) =>
+        r.json(),
+      );
       if (!alive) return;
       setTasks(
-        (tRes.tasks ?? []).map((t: { id: string; title: string; body: string }) => ({
-          id: t.id,
-          title: t.title,
-          body: t.body,
-        })),
+        (tRes.tasks ?? []).map(
+          (t: { id: string; title: string; body: string }) => ({
+            id: t.id,
+            title: t.title,
+            body: t.body,
+          }),
+        ),
       );
-      setLoadingTasks(false);
     })();
     return () => {
       alive = false;
     };
-  }, [slug]);
+  }, [sidebarSlug]);
 
-  // Poll roster — single shared source for RosterTray + Office indicators
+  // Poll roster for sidebar slug — drives Pixi indicators too
   const refetchRoster = useCallback(async () => {
     try {
       const res = await fetch(
-        `/api/roster?office=${encodeURIComponent(slug)}`,
+        `/api/roster?office=${encodeURIComponent(sidebarSlug)}`,
         { cache: "no-store" },
       );
       if (!res.ok) return;
@@ -121,7 +147,7 @@ export default function Home() {
     } catch {
       // ignore
     }
-  }, [slug]);
+  }, [sidebarSlug]);
 
   useEffect(() => {
     setRosterEntries(null);
@@ -135,9 +161,8 @@ export default function Home() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [slug, refetchRoster, inspectorBump]);
+  }, [sidebarSlug, refetchRoster, inspectorBump]);
 
-  // Derived state from roster entries
   const busyDeskIds = useMemo(() => {
     const s = new Set<string>();
     for (const e of rosterEntries ?? []) {
@@ -163,11 +188,23 @@ export default function Home() {
     return m;
   }, [rosterEntries]);
 
+  // Desk→agent lookup built from ALL offices (for cross-module interactions)
   const agentByDesk = useMemo(() => {
-    const m = new Map<string, { id: string; isReal: boolean }>();
-    for (const a of office.agents) m.set(a.deskId, { id: a.id, isReal: a.isReal });
+    const m = new Map<
+      string,
+      { id: string; isReal: boolean; officeSlug: OfficeSlug }
+    >();
+    for (const slug of order) {
+      for (const a of offices[slug].agents) {
+        m.set(a.deskId, {
+          id: a.id,
+          isReal: a.isReal,
+          officeSlug: slug,
+        });
+      }
+    }
     return m;
-  }, [office]);
+  }, []);
 
   const runByDesk = useMemo(() => {
     const m = new Map<string, string | null>();
@@ -178,12 +215,25 @@ export default function Home() {
   }, [rosterEntries]);
 
   const handleAgentClick = useCallback(
-    (deskId: string, clientX: number, clientY: number) => {
+    (
+      officeSlug: string,
+      deskId: string,
+      clientX: number,
+      clientY: number,
+    ) => {
+      const slug = officeSlug as OfficeSlug;
+      // If clicking an agent in a different office than the current sidebar,
+      // switch sidebar context first so the inspector/roster query the right server.
+      if (slug !== sidebarSlug) {
+        setSidebarSlug(slug);
+        localStorage.setItem("ri-office", slug);
+      }
       const kind = agentStatus.get(deskId);
       if (kind === "awaiting_input") {
-        selectDesk(deskId);
+        selectDesk(deskId, slug);
         setBubble({
           deskId,
+          officeSlug: slug,
           x: clientX,
           y: clientY,
           mode: "reply",
@@ -192,29 +242,37 @@ export default function Home() {
         return;
       }
       if (kind === "done_unacked") {
-        // Opening the inspector triggers auto-ack inside the inspector component.
-        selectDesk(deskId);
+        selectDesk(deskId, slug);
         setBubble(null);
         return;
       }
-      // No indicator — open task bubble and pull agent into inspector
       const agent = agentByDesk.get(deskId);
       if (!agent) return;
-      selectDesk(deskId);
-      setBubble({ deskId, x: clientX, y: clientY, mode: "task" });
+      selectDesk(deskId, slug);
+      setBubble({
+        deskId,
+        officeSlug: slug,
+        x: clientX,
+        y: clientY,
+        mode: "task",
+      });
     },
-    [agentStatus, agentByDesk, runByDesk, selectDesk],
+    [agentStatus, agentByDesk, runByDesk, selectDesk, sidebarSlug],
   );
 
   const handleDeskDrop = useCallback(
-    async (deskId: string, e: React.DragEvent<HTMLDivElement>) => {
+    async (
+      officeSlug: string,
+      deskId: string,
+      e: React.DragEvent<HTMLDivElement>,
+    ) => {
+      const slug = officeSlug as OfficeSlug;
       const taskId = e.dataTransfer.getData("application/x-robot-task");
       if (!taskId) return;
       const agent = agentByDesk.get(deskId);
       if (!agent) return;
 
       const droppedTask = tasks.find((t) => t.id === taskId);
-
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
 
       const res = await fetch("/api/assignments", {
@@ -223,16 +281,15 @@ export default function Home() {
         body: JSON.stringify({ taskId, agentId: agent.id, officeSlug: slug }),
       });
       if (!res.ok) {
-        // Failed — refresh tasks; roster will self-refresh via poll
-        const tRes = await fetch(`/api/tasks?office=${slug}`).then((r) => r.json());
+        const tRes = await fetch(`/api/tasks?office=${sidebarSlug}`).then(
+          (r) => r.json(),
+        );
         setTasks(tRes.tasks ?? []);
         return;
       }
-
       const { assignment } = (await res.json()) as {
         assignment: { id: string };
       };
-
       if (agent.isReal && droppedTask) {
         const prompt = droppedTask.body
           ? `${droppedTask.title}\n\n${droppedTask.body}`
@@ -248,13 +305,12 @@ export default function Home() {
           }),
         }).catch(() => {});
       }
-
       void refetchRoster();
       if (selectedDeskId === deskId) {
         setInspectorBump((n) => n + 1);
       }
     },
-    [agentByDesk, slug, selectedDeskId, tasks, refetchRoster],
+    [agentByDesk, sidebarSlug, selectedDeskId, tasks, refetchRoster],
   );
 
   const submitBubble = useCallback(
@@ -263,14 +319,18 @@ export default function Home() {
       const trimmed = text.trim();
       if (!trimmed) return;
       if (bubble.mode === "reply" && bubble.runId) {
-        await fetch(`/api/runs/${encodeURIComponent(bubble.runId)}/reply`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reply: trimmed }),
-        }).catch(() => {});
+        await fetch(
+          `/api/runs/${encodeURIComponent(bubble.runId)}/reply`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reply: trimmed }),
+          },
+        ).catch(() => {});
         setBubble(null);
         void refetchRoster();
-        if (selectedDeskId === bubble.deskId) setInspectorBump((n) => n + 1);
+        if (selectedDeskId === bubble.deskId)
+          setInspectorBump((n) => n + 1);
       } else if (bubble.mode === "task") {
         const agent = agentByDesk.get(bubble.deskId);
         if (!agent) return;
@@ -278,74 +338,105 @@ export default function Home() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            officeSlug: slug,
+            officeSlug: bubble.officeSlug,
             agentId: agent.id,
             prompt: trimmed,
           }),
         }).catch(() => {});
         setBubble(null);
-        if (agent.isReal) selectDesk(bubble.deskId);
+        if (agent.isReal) selectDesk(bubble.deskId, bubble.officeSlug);
         void refetchRoster();
-        if (selectedDeskId === bubble.deskId) setInspectorBump((n) => n + 1);
+        if (selectedDeskId === bubble.deskId)
+          setInspectorBump((n) => n + 1);
       }
     },
-    [bubble, slug, agentByDesk, selectedDeskId, selectDesk, refetchRoster],
+    [bubble, agentByDesk, selectedDeskId, selectDesk, refetchRoster],
   );
 
-  // Agent drag-to-reposition handler.
-  // The PixiJS canvas has already moved the sprite optimistically in-canvas.
-  // We just POST to persist the change. On failure, log; sprite stays where dropped
-  // (cosmetically fine for a design tool — next page reload reads the file from disk).
   const handleAgentMove = useCallback(
-    async (deskId: string, gridX: number, gridY: number) => {
+    async (
+      officeSlug: string,
+      deskId: string,
+      gridX: number,
+      gridY: number,
+    ) => {
       try {
         const res = await fetch("/api/desks/move", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ officeSlug: slug, deskId, gridX, gridY }),
+          body: JSON.stringify({ officeSlug, deskId, gridX, gridY }),
         });
         if (!res.ok) {
-          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          const err = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
           console.error("desk move failed:", err.error ?? res.status);
         }
       } catch (e) {
         console.error("desk move network error:", e);
       }
     },
-    [slug],
+    [],
   );
 
   const officeContainerRef = useRef<HTMLDivElement | null>(null);
+  const sidebarOffice = offices[sidebarSlug];
+
+  const allAgentsForDock = useMemo(() => {
+    return order.flatMap((slug) =>
+      offices[slug].agents.map((a) => ({
+        id: a.id,
+        name: a.name,
+        role: a.role,
+        deskId: a.deskId,
+        isReal: a.isReal,
+        officeSlug: slug,
+      })),
+    );
+  }, []);
 
   return (
+    <DockTabsProvider>
     <div className="flex h-screen w-screen flex-col bg-black text-white">
       <header className="flex items-center justify-between border-b border-white/10 px-4 py-2 text-sm">
         <div className="font-mono tracking-tight">robots-in-a-house</div>
         <div className="flex items-center gap-3">
-          <div className="font-mono text-xs opacity-60">office: {office.name}</div>
-          <button
-            type="button"
-            onClick={() => selectOffice(other)}
-            className="rounded border border-white/20 px-2 py-0.5 font-mono text-xs hover:bg-white/10"
-          >
-            switch → {officesStatic[other].name}
-          </button>
+          <div className="font-mono text-xs opacity-60">
+            station: {station.name}
+            {focusedModule ? ` · ${offices[focusedModule].name}` : " · overview"}
+          </div>
         </div>
       </header>
       <div className="flex flex-1 overflow-hidden">
         <div className="flex flex-1 flex-col overflow-hidden">
-          <main className="relative flex-1 overflow-hidden" ref={officeContainerRef}>
-            <Office
-              key={slug}
-              office={office}
+          <main
+            className="relative flex-1 overflow-hidden"
+            ref={officeContainerRef}
+          >
+            <Station
+              station={station}
+              offices={offices}
+              focusedModule={focusedModule}
               busyDeskIds={busyDeskIds}
               agentStatus={agentStatus}
               selectedDeskId={selectedDeskId}
-              onDeskSelect={selectDesk}
+              onDeskSelect={(deskId) => selectDesk(deskId)}
               onAgentClick={handleAgentClick}
               onDeskDrop={handleDeskDrop}
               onAgentMove={handleAgentMove}
+              onModuleFocus={(slug) => focusModule(slug as OfficeSlug)}
+              onWarRoomClick={(slug) => {
+                if (slug === "paradise" || slug === "dontcall") {
+                  setMeetingOpen({ officeSlug: slug });
+                }
+              }}
               showGrid={showGrid}
+            />
+            <StationMinimap
+              station={station}
+              offices={offices}
+              focusedModule={focusedModule}
+              onFocusModule={focusModule}
             />
             {bubble && (
               <SpriteBubble
@@ -360,39 +451,67 @@ export default function Home() {
             )}
           </main>
           <UsageTracker />
+          <ChatDock
+            agents={allAgentsForDock}
+            rosterEntries={rosterEntries ?? []}
+          />
           <PromptBar
-            agents={office.agents}
-            officeSlug={slug}
+            agents={sidebarOffice.agents}
+            officeSlug={sidebarSlug}
             onSent={({ deskId, isReal }) => {
               if (isReal) selectDesk(deskId);
               void refetchRoster();
-              if (selectedDeskId === deskId) setInspectorBump((n) => n + 1);
+              if (selectedDeskId === deskId)
+                setInspectorBump((n) => n + 1);
             }}
           />
         </div>
         {selectedDeskId ? (
           <AgentInspector
-            key={`${slug}:${selectedDeskId}:${inspectorBump}`}
-            officeSlug={slug}
+            key={`${sidebarSlug}:${selectedDeskId}:${inspectorBump}`}
+            officeSlug={sidebarSlug}
             deskId={selectedDeskId}
             onClose={() => selectDesk(null)}
           />
         ) : (
           <RosterTray
-            officeSlug={slug}
+            officeSlug={sidebarSlug}
             entries={rosterEntries}
             onSelect={(deskId) => selectDesk(deskId)}
+            onConveneWarRoom={() => setMeetingOpen({ officeSlug: sidebarSlug })}
+            warRoomAccent={offices[sidebarSlug].theme.accent}
           />
         )}
       </div>
+      {meetingOpen && (
+        <MeetingModal
+          office={offices[meetingOpen.officeSlug]}
+          roster={meetingOpen.officeSlug === sidebarSlug ? rosterEntries : null}
+          onClose={() => setMeetingOpen(null)}
+          onConvened={() => {
+            void refetchRoster();
+          }}
+          onOpenInspector={(deskId) => {
+            const slug = meetingOpen.officeSlug;
+            setMeetingOpen(null);
+            focusModule(slug);
+            selectDesk(deskId, slug);
+          }}
+        />
+      )}
       <CommandPalette
-        slug={slug}
-        otherSlug={other}
-        otherName={officesStatic[other].name}
-        agents={office.agents}
-        onSwitchOffice={() => selectOffice(other)}
+        slug={sidebarSlug}
+        otherSlug={sidebarSlug === "paradise" ? "dontcall" : "paradise"}
+        otherName={
+          offices[sidebarSlug === "paradise" ? "dontcall" : "paradise"].name
+        }
+        agents={sidebarOffice.agents}
+        onSwitchOffice={() =>
+          focusModule(sidebarSlug === "paradise" ? "dontcall" : "paradise")
+        }
         onFocusAgent={(deskId) => selectDesk(deskId)}
       />
     </div>
+    </DockTabsProvider>
   );
 }
