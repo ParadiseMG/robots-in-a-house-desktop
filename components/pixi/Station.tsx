@@ -218,7 +218,7 @@ export default function Station({
       // ── Mount each module ────────────────────────────────────────────────
       type ModuleHandle = {
         slug: string;
-        container: Container;
+        container: InstanceType<typeof Container>;
         offsetX: number;
         offsetY: number;
         tw: number;
@@ -226,7 +226,7 @@ export default function Station({
         worldW: number;
         worldH: number;
         office: OfficeConfig;
-        gridOverlay: Container;
+        gridOverlay: InstanceType<typeof Container>;
         deskShapes: Map<string, InstanceType<typeof Graphics>>;
         agentSprites: Map<string, AgentSprites>;
         deskOfAgent: Map<string, string>;

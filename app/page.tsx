@@ -12,13 +12,10 @@ import type {
 import Station from "@/components/pixi/Station";
 import StationMinimap from "@/components/station/StationMinimap";
 import type { Task } from "@/components/tray/TaskTray";
-import RosterTray, { type RosterEntry } from "@/components/roster/RosterTray";
-import AgentInspector from "@/components/inspector/AgentInspector";
 import PromptBar from "@/components/prompt-bar/PromptBar";
 import CommandPalette from "@/components/palette/CommandPalette";
 import UsageTracker from "@/components/usage/UsageTracker";
 import SpriteBubble from "@/components/sprite-bubble/SpriteBubble";
-import MeetingModal from "@/components/war-room/MeetingModal";
 import ChatDock, { DockTabsProvider } from "@/components/dock/ChatDock";
 import { useDockTabs } from "@/hooks/useDockTabs";
 import AgentHoverCard from "@/components/canvas/AgentHoverCard";
@@ -33,6 +30,26 @@ const order = ["paradise", "dontcall"] as const;
 type OfficeSlug = (typeof order)[number];
 
 const ROSTER_POLL_MS = 5_000;
+
+type RosterEntry = {
+  agent: {
+    id: string;
+    deskId: string;
+    name: string;
+    role: string;
+    isReal: boolean;
+    model: string | null;
+  };
+  current: {
+    assignmentId: string;
+    assignedAt: number;
+    task: { id: string; title: string; body: string };
+    runId: string | null;
+    runStatus: string | null;
+    acknowledgedAt: number | null;
+    inputQuestion: string | null;
+  } | null;
+};
 
 export default function Home() {
   return (
@@ -53,7 +70,6 @@ function HomeInner() {
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedDeskId, setSelectedDeskId] = useState<string | null>(null);
-  const [inspectorBump, setInspectorBump] = useState(0);
   const [showGrid, setShowGrid] = useState(false);
 
   const [rosterEntries, setRosterEntries] = useState<RosterEntry[] | null>(
@@ -67,7 +83,6 @@ function HomeInner() {
     mode: "task" | "reply";
     runId?: string | null;
   } | null>(null);
-  const [meetingOpen, setMeetingOpen] = useState<{ officeSlug: OfficeSlug } | null>(null);
   const [hoverCard, setHoverCard] = useState<{
     deskId: string;
     officeSlug: OfficeSlug;
@@ -245,7 +260,7 @@ function HomeInner() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [sidebarSlug, refetchRoster, inspectorBump]);
+  }, [sidebarSlug, refetchRoster]);
 
   const busyDeskIds = useMemo(() => {
     const s = new Set<string>();
@@ -402,9 +417,6 @@ function HomeInner() {
         }).catch(() => {});
       }
       void refetchRoster();
-      if (selectedDeskId === deskId) {
-        setInspectorBump((n) => n + 1);
-      }
     },
     [agentByDesk, sidebarSlug, selectedDeskId, tasks, refetchRoster],
   );
@@ -425,8 +437,6 @@ function HomeInner() {
         ).catch(() => {});
         setBubble(null);
         void refetchRoster();
-        if (selectedDeskId === bubble.deskId)
-          setInspectorBump((n) => n + 1);
       } else if (bubble.mode === "task") {
         const agent = agentByDesk.get(bubble.deskId);
         if (!agent) return;
@@ -442,11 +452,9 @@ function HomeInner() {
         setBubble(null);
         if (agent.isReal) selectDesk(bubble.deskId, bubble.officeSlug);
         void refetchRoster();
-        if (selectedDeskId === bubble.deskId)
-          setInspectorBump((n) => n + 1);
       }
     },
-    [bubble, agentByDesk, selectedDeskId, selectDesk, refetchRoster],
+    [bubble, agentByDesk, selectDesk, refetchRoster],
   );
 
   const handleAgentMove = useCallback(
@@ -539,7 +547,7 @@ function HomeInner() {
               station={station}
               offices={offices}
               focusedModule={focusedModule}
-              onFocusModule={focusModule}
+              onFocusModule={(slug) => focusModule(slug as OfficeSlug)}
             />
             {bubble && (
               <SpriteBubble
