@@ -57,6 +57,8 @@ type Props = {
     clientY: number,
   ) => void;
   onAgentHoverOut?: () => void;
+  /** Fires whenever agent screen positions update (used for ambient bubbles) */
+  onAgentPositions?: (positions: Map<string, { clientX: number; clientY: number }>) => void;
   showGrid?: boolean;
 };
 
@@ -75,6 +77,7 @@ export default function Station({
   onWarRoomClick,
   onAgentHover,
   onAgentHoverOut,
+  onAgentPositions,
   showGrid = false,
 }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -96,6 +99,8 @@ export default function Station({
   onAgentHoverRef.current = onAgentHover;
   const onAgentHoverOutRef = useRef(onAgentHoverOut);
   onAgentHoverOutRef.current = onAgentHoverOut;
+  const onAgentPositionsRef = useRef(onAgentPositions);
+  onAgentPositionsRef.current = onAgentPositions;
   const showGridRef = useRef(showGrid);
   showGridRef.current = showGrid;
   const focusedRef = useRef<string | null>(focusedModule);
@@ -1128,6 +1133,24 @@ export default function Station({
         bloomPhase += 0.01 * app.ticker.deltaTime;
         bloom.bloomScale =
           0.8 + Math.sin(bloomPhase) * 0.08 + (focusedRef.current ? 0.1 : 0);
+
+        // Emit agent positions for ambient bubbles (every ~30 frames)
+        if (onAgentPositionsRef.current && Math.round(bloomPhase * 10) % 30 === 0) {
+          const rect = app.canvas.getBoundingClientRect();
+          const sx = rect.width / app.canvas.width;
+          const sy = rect.height / app.canvas.height;
+          const posMap = new Map<string, { clientX: number; clientY: number }>();
+          for (const m of modules) {
+            for (const [agentId, sprites] of m.agentSprites) {
+              const globalPos = sprites.body.getGlobalPosition();
+              posMap.set(agentId, {
+                clientX: rect.left + globalPos.x * sx,
+                clientY: rect.top + (globalPos.y - sprites.body.height - 8) * sy,
+              });
+            }
+          }
+          onAgentPositionsRef.current(posMap);
+        }
       };
       app.ticker.add(onTick);
 

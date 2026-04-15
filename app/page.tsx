@@ -22,6 +22,7 @@ import MeetingModal from "@/components/war-room/MeetingModal";
 import ChatDock, { DockTabsProvider } from "@/components/dock/ChatDock";
 import { useDockTabs } from "@/hooks/useDockTabs";
 import AgentHoverCard from "@/components/canvas/AgentHoverCard";
+import { useAmbientStream } from "@/hooks/useAmbientStream";
 
 const offices: Record<string, OfficeConfig> = {
   paradise: paradiseRaw as OfficeConfig,
@@ -42,7 +43,7 @@ export default function Home() {
 }
 
 function HomeInner() {
-  const { openOrFocus, openWarRoom } = useDockTabs();
+  const { openOrFocus, openWarRoom, focusedTab } = useDockTabs();
 
   // The office whose sidebar + roster data is shown. Always a real slug (never null).
   const [sidebarSlug, setSidebarSlug] = useState<OfficeSlug>("paradise");
@@ -73,6 +74,23 @@ function HomeInner() {
     x: number;
     y: number;
   } | null>(null);
+  const agentPositionsRef = useRef<Map<string, { clientX: number; clientY: number }>>(new Map());
+
+  // Ambient stream — track active runs for non-focused agents
+  const activeRuns = useMemo(() => {
+    return (rosterEntries ?? [])
+      .filter((e) => {
+        const st = e.current?.runStatus;
+        return st === "running" || st === "starting";
+      })
+      .map((e) => ({
+        agentId: e.agent.id,
+        deskId: e.agent.deskId,
+        runId: e.current?.runId ?? "",
+      }))
+      .filter((r) => r.runId);
+  }, [rosterEntries]);
+  const ambientLines = useAmbientStream(activeRuns, focusedTab?.agentId ?? null);
 
   // Restore sidebar slug + desk selection from localStorage on mount
   useEffect(() => {
@@ -464,6 +482,9 @@ function HomeInner() {
                 setHoverCard({ deskId, officeSlug: officeSlug as OfficeSlug, x: clientX, y: clientY });
               }}
               onAgentHoverOut={() => setHoverCard(null)}
+              onAgentPositions={(positions) => {
+                agentPositionsRef.current = positions;
+              }}
               showGrid={showGrid}
             />
             <StationMinimap
@@ -483,6 +504,22 @@ function HomeInner() {
                 onDismiss={() => setBubble(null)}
               />
             )}
+            {/* Ambient bubbles — one per active non-focused agent */}
+            {Array.from(ambientLines.values()).map((line) => {
+              const pos = agentPositionsRef.current.get(line.agentId);
+              if (!pos) return null;
+              return (
+                <SpriteBubble
+                  key={`ambient:${line.agentId}`}
+                  mode="ambient"
+                  x={pos.clientX}
+                  y={pos.clientY}
+                  text={line.lastLine}
+                  containerRef={officeContainerRef}
+                  onDismiss={() => {}} // ambient auto-dismisses itself
+                />
+              );
+            })}
           </main>
           {hoverCard && (() => {
             const agent = agentByDesk.get(hoverCard.deskId);
