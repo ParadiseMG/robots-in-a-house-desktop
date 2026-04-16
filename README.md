@@ -1,39 +1,23 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# robots-in-a-house
 
-## Getting Started
+Top-down pixel-art office where Connor works alongside AI agents (real Claude Agent SDK sessions) rendered as sprites. Two offices: **Paradise** (music events) and **Don't Call** (SMS service for tradespeople).
 
-First, run the development server:
+## Run it
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Next on `:3000`, agent runner on `:3100`. DB auto-migrates on first boot.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+SDK auth comes from the `claude` CLI login or `ANTHROPIC_API_KEY` env.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Contributing — read this first
 
-## Learn More
+**→ `docs/BUILDING.md`** is the complete builder brief: architecture, repo map, DB schema, message flow, feature pattern, conventions, and known gotchas. A new agent (human or AI) should be able to pick up work from that doc alone.
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Directors (Maestro for Paradise, Foreman for Don't Call) own both org design and build work — ask them when you want a feature or a new agent.
 
 ## Credits
 

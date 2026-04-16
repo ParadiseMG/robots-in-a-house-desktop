@@ -38,17 +38,9 @@ export async function GET(
             }>;
           for (const r of rows) {
             lastEventId = r.id;
-            send({
-              id: r.id,
-              ts: r.ts,
-              kind: r.kind,
-              payload: JSON.parse(r.payload),
-            });
-            if (
-              r.kind === "status" &&
-              (JSON.parse(r.payload).status === "done" ||
-                JSON.parse(r.payload).status === "error")
-            ) {
+            const payload = JSON.parse(r.payload) as Record<string, unknown>;
+            send({ id: r.id, ts: r.ts, kind: r.kind, payload });
+            if (r.kind === "status" && (payload.status === "done" || payload.status === "error")) {
               done = true;
             }
           }

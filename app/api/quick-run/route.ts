@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { db, getAgent } from "@/server/db";
+import { db, getAgent, agentIsBusy, enqueuePrompt } from "@/server/db";
 
 const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:3100";
 
@@ -21,11 +21,23 @@ export async function POST(req: Request) {
   const agent = getAgent(officeSlug, agentId);
   if (!agent) return NextResponse.json({ error: "agent not found" }, { status: 404 });
 
+  const title = body.title?.trim() || prompt.split("\n")[0].slice(0, 80);
+
+  // If the agent is busy, queue the prompt instead of starting immediately
+  if (agent.isReal && agentIsBusy(officeSlug, agentId)) {
+    const queueId = enqueuePrompt(agentId, officeSlug, title, prompt);
+    return NextResponse.json({
+      queued: true,
+      queueId,
+      deskId: agent.deskId,
+      isReal: agent.isReal,
+    });
+  }
+
   const d = db();
   const taskId = crypto.randomUUID();
   const assignmentId = crypto.randomUUID();
   const now = Date.now();
-  const title = body.title?.trim() || prompt.split("\n")[0].slice(0, 80);
 
   const tx = d.transaction(() => {
     d.prepare(
@@ -55,6 +67,7 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json({
+    queued: false,
     taskId,
     assignmentId,
     deskId: agent.deskId,

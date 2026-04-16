@@ -1,13 +1,23 @@
 import { NextResponse } from "next/server";
-import { db } from "@/server/db";
-import paradiseRaw from "@/config/paradise.office.json";
-import dontcallRaw from "@/config/dontcall.office.json";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { db, queueDepth } from "@/server/db";
 import type { OfficeConfig } from "@/lib/office-types";
 
-const offices: Record<string, OfficeConfig> = {
-  paradise: paradiseRaw as OfficeConfig,
-  dontcall: dontcallRaw as OfficeConfig,
-};
+const VALID_SLUGS = new Set(["paradise", "dontcall", "operations"]);
+
+async function loadOffice(slug: string): Promise<OfficeConfig | null> {
+  if (!VALID_SLUGS.has(slug)) return null;
+  try {
+    const raw = await fs.readFile(
+      path.join(process.cwd(), "config", `${slug}.office.json`),
+      "utf-8",
+    );
+    return JSON.parse(raw) as OfficeConfig;
+  } catch {
+    return null;
+  }
+}
 
 export const dynamic = "force-dynamic";
 
@@ -17,54 +27,75 @@ export async function GET(req: Request) {
   if (!officeSlug) {
     return NextResponse.json({ error: "missing office" }, { status: 400 });
   }
-  const office = offices[officeSlug];
+  const office = await loadOffice(officeSlug);
   if (!office) return NextResponse.json({ error: "office not found" }, { status: 404 });
 
   const d = db();
-  const entries = office.agents.map((agent) => {
-    const current = d
+
+  // Batch query 1: one open assignment per agent in this office
+  type AssignRow = { assignment_id: string; agent_id: string; assigned_at: number; task_id: string; title: string; body: string };
+  const assignRows = d
+    .prepare(
+      `SELECT a.id as assignment_id, a.agent_id, a.assigned_at,
+              t.id as task_id, t.title, t.body
+       FROM assignments a
+       JOIN tasks t ON t.id = a.task_id
+       WHERE a.office_slug = ? AND a.completed_at IS NULL
+       ORDER BY a.assigned_at DESC`,
+    )
+    .all(officeSlug) as AssignRow[];
+  // Keep only the latest per agent (rows already ordered DESC)
+  const currentByAgent = new Map<string, AssignRow>();
+  for (const row of assignRows) {
+    if (!currentByAgent.has(row.agent_id)) currentByAgent.set(row.agent_id, row);
+  }
+
+  // Batch query 2: latest run per open assignment
+  const assignmentIds = [...currentByAgent.values()].map((r) => r.assignment_id);
+  type RunRow = { assignment_id: string; id: string; status: string; acknowledged_at: number | null };
+  const runByAssignment = new Map<string, RunRow>();
+  if (assignmentIds.length > 0) {
+    const placeholders = assignmentIds.map(() => "?").join(",");
+    const runRows = d
       .prepare(
-        `SELECT a.id as assignment_id, a.assigned_at, t.id as task_id, t.title, t.body
-         FROM assignments a
-         JOIN tasks t ON t.id = a.task_id
-         WHERE a.agent_id = ? AND a.office_slug = ? AND a.completed_at IS NULL
-         ORDER BY a.assigned_at DESC
-         LIMIT 1`,
+        `SELECT assignment_id, id, status, acknowledged_at FROM agent_runs
+         WHERE assignment_id IN (${placeholders})
+         ORDER BY started_at DESC`,
       )
-      .get(agent.id, officeSlug) as
-      | { assignment_id: string; assigned_at: number; task_id: string; title: string; body: string }
-      | undefined;
+      .all(...assignmentIds) as RunRow[];
+    for (const row of runRows) {
+      if (!runByAssignment.has(row.assignment_id)) runByAssignment.set(row.assignment_id, row);
+    }
+  }
 
-    const latestRun = current
-      ? (d
-          .prepare(
-            `SELECT id, status, acknowledged_at FROM agent_runs
-             WHERE assignment_id = ?
-             ORDER BY started_at DESC LIMIT 1`,
-          )
-          .get(current.assignment_id) as
-          | { id: string; status: string; acknowledged_at: number | null }
-          | undefined)
-      : undefined;
-
-    let inputQuestion: string | null = null;
-    if (latestRun && latestRun.status === "awaiting_input") {
-      const row = d
-        .prepare(
-          `SELECT payload FROM run_events
-           WHERE run_id = ? AND kind = 'input_request'
-           ORDER BY id DESC LIMIT 1`,
-        )
-        .get(latestRun.id) as { payload: string } | undefined;
-      if (row) {
+  // Batch query 3: pending input questions for awaiting_input runs
+  const awaitingRunIds = [...runByAssignment.values()]
+    .filter((r) => r.status === "awaiting_input")
+    .map((r) => r.id);
+  const inputQuestionByRun = new Map<string, string>();
+  if (awaitingRunIds.length > 0) {
+    const placeholders = awaitingRunIds.map(() => "?").join(",");
+    const eventRows = d
+      .prepare(
+        `SELECT run_id, payload FROM run_events
+         WHERE run_id IN (${placeholders}) AND kind = 'input_request'
+         ORDER BY id DESC`,
+      )
+      .all(...awaitingRunIds) as Array<{ run_id: string; payload: string }>;
+    for (const row of eventRows) {
+      if (!inputQuestionByRun.has(row.run_id)) {
         try {
           const parsed = JSON.parse(row.payload) as { question?: string };
-          inputQuestion = parsed.question ?? null;
-        } catch {
-          // ignore
-        }
+          if (parsed.question) inputQuestionByRun.set(row.run_id, parsed.question);
+        } catch { /* ignore corrupt payload */ }
       }
     }
+  }
+
+  const entries = office.agents.map((agent) => {
+    const current = currentByAgent.get(agent.id);
+    const latestRun = current ? runByAssignment.get(current.assignment_id) : undefined;
+    const inputQuestion = latestRun ? (inputQuestionByRun.get(latestRun.id) ?? null) : null;
 
     return {
       agent: {
@@ -86,6 +117,7 @@ export async function GET(req: Request) {
             inputQuestion,
           }
         : null,
+      queueDepth: queueDepth(officeSlug, agent.id),
     };
   });
 

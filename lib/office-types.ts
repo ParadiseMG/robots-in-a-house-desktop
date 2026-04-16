@@ -52,7 +52,15 @@ export type ThemeConfig = {
   };
 };
 
-export type RoomConfig = { id: string; name: string; gridX: number; gridY: number; w: number; h: number };
+export type RoomConfig = {
+  id: string;
+  name: string;
+  gridX: number;
+  gridY: number;
+  w: number;
+  h: number;
+  warRoom?: { gridX: number; gridY: number };  // cell to render the meeting-table click target
+};
 export type DeskConfig = { id: string; roomId: string; gridX: number; gridY: number; facing: "N" | "E" | "S" | "W" };
 export type AgentConfig = {
   id: string;
@@ -65,6 +73,7 @@ export type AgentConfig = {
   cwd?: string;
   allowedTools?: string[];
   model?: string;        // Claude model id, e.g. "claude-opus-4-6"; omit for SDK default (Sonnet)
+  isHead?: boolean;      // brand head — gets create_agent tool + Build Department UI
 };
 
 /**
@@ -83,4 +92,24 @@ export type OfficeConfig = {
   rooms: RoomConfig[];
   desks: DeskConfig[];
   agents: AgentConfig[];
+};
+
+export type StationBackground = {
+  kind: "starfield";
+  seed: number;
+  density: number;
+};
+
+export type StationModule = {
+  office: string;
+  offsetX: number;
+  offsetY: number;
+  accent: string;
+};
+
+export type StationConfig = {
+  slug: string;
+  name: string;
+  modules: StationModule[];
+  background: StationBackground;
 };

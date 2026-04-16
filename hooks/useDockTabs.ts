@@ -31,12 +31,13 @@ type State = {
 
 type Action =
   | { type: "OPEN_OR_FOCUS"; tab: Omit<DockTab, "badge" | "pinned"> }
-  | { type: "OPEN_WAR_ROOM"; officeSlug: string; label: string }
+  | { type: "OPEN_WAR_ROOM"; officeSlug: string; label: string; meetingId?: string }
   | { type: "CLOSE"; id: string }
   | { type: "FOCUS"; id: string }
   | { type: "PIN"; id: string }
   | { type: "SET_BADGE"; id: string; badge: TabBadge }
   | { type: "SET_MEETING_ID"; id: string; meetingId: string }
+  | { type: "REORDER"; fromId: string; toId: string }
   | { type: "LOAD_PERSISTED"; state: State };
 
 const STORAGE_KEY = "ri-dock-tabs";
@@ -56,10 +57,22 @@ function reducer(state: State, action: Action): State {
       return { tabs: [...state.tabs, newTab], focusedId: newTab.id };
     }
     case "OPEN_WAR_ROOM": {
-      const id = `war-room:${action.officeSlug}`;
+      // If a meetingId is provided, key by meeting so each war room gets its own tab
+      const id = action.meetingId
+        ? `war-room:${action.meetingId}`
+        : `war-room:${action.officeSlug}`;
       const exists = state.tabs.find((t) => t.id === id);
       if (exists) {
         return { ...state, focusedId: id };
+      }
+      // Also check if there's already a tab for this meeting under the old slug-based key
+      if (action.meetingId) {
+        const byMeeting = state.tabs.find(
+          (t) => t.kind === "war-room" && t.meetingId === action.meetingId,
+        );
+        if (byMeeting) {
+          return { ...state, focusedId: byMeeting.id };
+        }
       }
       const newTab: DockTab = {
         id,
@@ -70,7 +83,7 @@ function reducer(state: State, action: Action): State {
         pinned: false,
         label: action.label,
         badge: null,
-        meetingId: null,
+        meetingId: action.meetingId ?? null,
       };
       return { tabs: [...state.tabs, newTab], focusedId: id };
     }
@@ -110,8 +123,25 @@ function reducer(state: State, action: Action): State {
         ),
       };
     }
-    case "LOAD_PERSISTED":
-      return action.state;
+    case "REORDER": {
+      const from = state.tabs.findIndex((t) => t.id === action.fromId);
+      const to = state.tabs.findIndex((t) => t.id === action.toId);
+      if (from === -1 || to === -1 || from === to) return state;
+      const tabs = [...state.tabs];
+      const [moved] = tabs.splice(from, 1);
+      tabs.splice(to, 0, moved);
+      return { ...state, tabs };
+    }
+    case "LOAD_PERSISTED": {
+      // Deduplicate by id (localStorage can accumulate stale dupes)
+      const seen = new Set<string>();
+      const tabs = action.state.tabs.filter((t) => {
+        if (seen.has(t.id)) return false;
+        seen.add(t.id);
+        return true;
+      });
+      return { ...action.state, tabs };
+    }
     default:
       return state;
   }
@@ -125,9 +155,10 @@ export type DockTabsContextValue = {
   focusedTab: DockTab | null;
   dispatch: Dispatch<Action>;
   openOrFocus: (tab: Omit<DockTab, "badge" | "pinned">) => void;
-  openWarRoom: (officeSlug: string, label: string) => void;
+  openWarRoom: (officeSlug: string, label: string, meetingId?: string) => void;
   close: (id: string) => void;
   focus: (id: string) => void;
+  reorder: (fromId: string, toId: string) => void;
 };
 
 export const DockTabsContext = createContext<DockTabsContextValue | null>(null);
@@ -174,10 +205,11 @@ export function buildDockTabsValue(
 ): DockTabsContextValue {
   const openOrFocus = (tab: Omit<DockTab, "badge" | "pinned">) =>
     dispatch({ type: "OPEN_OR_FOCUS", tab });
-  const openWarRoom = (officeSlug: string, label: string) =>
-    dispatch({ type: "OPEN_WAR_ROOM", officeSlug, label });
+  const openWarRoom = (officeSlug: string, label: string, meetingId?: string) =>
+    dispatch({ type: "OPEN_WAR_ROOM", officeSlug, label, meetingId });
   const close = (id: string) => dispatch({ type: "CLOSE", id });
   const focus = (id: string) => dispatch({ type: "FOCUS", id });
+  const reorder = (fromId: string, toId: string) => dispatch({ type: "REORDER", fromId, toId });
   const focusedTab = state.tabs.find((t) => t.id === state.focusedId) ?? null;
   return {
     tabs: state.tabs,
@@ -188,5 +220,6 @@ export function buildDockTabsValue(
     openWarRoom,
     close,
     focus,
+    reorder,
   };
 }

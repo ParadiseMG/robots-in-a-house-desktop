@@ -12,6 +12,7 @@ import {
   loadPremade,
   loadTilesheet,
   idleFramesForFacing,
+  type PremadeFrames,
 } from "@/lib/sprite-loader";
 import { isContextWarning } from "@/lib/model-context";
 
@@ -141,6 +142,7 @@ export default function Station({
         Application,
         Container,
         Graphics,
+        Rectangle,
         Sprite,
         AnimatedSprite,
         ColorMatrixFilter,
@@ -207,10 +209,10 @@ export default function Station({
 
       // ── Bloom on world ───────────────────────────────────────────────────
       const bloom = new AdvancedBloomFilter({
-        threshold: 0.55,
-        bloomScale: 0.85,
+        threshold: 0.88,
+        bloomScale: 0.18,
         brightness: 1.0,
-        blur: 4,
+        blur: 3,
         quality: 4,
       });
       world.filters = [bloom];
@@ -241,9 +243,19 @@ export default function Station({
         check: InstanceType<typeof Graphics>;
         ctxWarning: InstanceType<typeof Text>;
         nameTag: InstanceType<typeof Container>;
+        shadow: InstanceType<typeof Graphics>;
+        deskGlow: InstanceType<typeof Graphics>;
         indicatorBaseY: number;
         agentId: string;
         model: string | null;
+        restX: number;
+        restY: number;
+        lastKind: string | undefined;
+        anim: { type: "none" | "bounce" | "shake"; t: number };
+        allFrames: PremadeFrames["frames"];
+        idleFacing: "N" | "E" | "S" | "W";
+        wanderTimer: number;
+        wanderTarget: { x: number; y: number; dir: "N" | "E" | "S" | "W"; returning: boolean } | null;
       };
 
       // Shared drag state — at most one agent dragging at a time across modules.
@@ -283,12 +295,23 @@ export default function Station({
 
       const nameTagStyle = new TextStyle({
         fontFamily: "monospace",
-        fontSize: 9,
+        fontSize: 18,
         fill: 0xffffff,
         stroke: { color: 0x000000, width: 3, join: "round" },
       });
 
-      const buildNameTag = (name: string) => {
+      const roleColor = (role: string, name = ""): number => {
+        if (name === "Maestro") return 0xe11d48; // rose — Paradise director
+        const r = role.toLowerCase();
+        if (/director|lead/.test(r))                          return 0xd97706; // amber
+        if (/design|creative|content|visual|art/.test(r))    return 0x7c3aed; // violet
+        if (/engineer|infra|deploy|environment|monitor|bug/.test(r)) return 0x0284c7; // sky
+        if (/finance|commerce|ticketing|merch|sponsorship/.test(r))  return 0x047857; // emerald
+        if (/ops|bot|support|sales|promo|marketing|guest|a&r/.test(r)) return 0xc2410c; // orange
+        return 0x1e293b; // default slate
+      };
+
+      const buildNameTag = (name: string, role = "", agentName = "") => {
         const c = new Container();
         const label = new Text({ text: name, style: nameTagStyle });
         label.anchor.set(0.5, 0.5);
@@ -296,10 +319,11 @@ export default function Station({
         const padY = 2;
         const w = Math.ceil(label.width) + padX * 2;
         const h = Math.ceil(label.height) + padY * 2;
+        const color = roleColor(role, agentName);
         const bg = new Graphics()
           .roundRect(-w / 2, -h / 2, w, h, 4)
-          .fill({ color: 0x000000, alpha: 0.7 })
-          .stroke({ color: 0xffffff, alpha: 0.25, width: 1 });
+          .fill({ color, alpha: 0.85 })
+          .stroke({ color: 0xffffff, alpha: 0.2, width: 1 });
         c.addChild(bg, label);
         return c;
       };
@@ -552,41 +576,7 @@ export default function Station({
           furniture.addChild(g);
         }
 
-        // War-room click cells (one per room with `warRoom` set)
-        for (const room of office.rooms) {
-          if (!room.warRoom) continue;
-          const wx = room.warRoom.gridX;
-          const wy = room.warRoom.gridY;
-          const { x, y } = flat(wx, wy);
-          const wzBase = wy * office.grid.cols + wx;
-
-          const cell = new Graphics();
-          cell
-            .roundRect(2, 2, tw - 4, th - 4, 4)
-            .fill({ color: glowColor, alpha: 0.4 })
-            .stroke({ color: glowColor, width: 2, alpha: 1 });
-          cell.position.set(x, y);
-          cell.eventMode = "static";
-          cell.cursor = "pointer";
-          cell.zIndex = wzBase + 2;
-          const slug = office.slug;
-          cell.on("pointertap", (ev) => {
-            onWarRoomClickRef.current?.(slug);
-            ev.stopPropagation();
-          });
-          furniture.addChild(cell);
-
-          const warTag = buildNameTag("WAR ROOM");
-          warTag.position.set(x + tw / 2, y - 4);
-          warTag.zIndex = wzBase + 7;
-          warTag.eventMode = "static";
-          warTag.cursor = "pointer";
-          warTag.on("pointertap", (ev) => {
-            onWarRoomClickRef.current?.(slug);
-            ev.stopPropagation();
-          });
-          furniture.addChild(warTag);
-        }
+        // War-room data is kept in config for the chat dock — visual cells removed.
 
         // Agents
         const agentSprites = new Map<string, AgentSprites>();
@@ -619,14 +609,19 @@ export default function Station({
           const zBase = desk.gridY * office.grid.cols + desk.gridX;
           body.zIndex = zBase + 3;
           body.eventMode = "static";
+          // Tight hit region — local coords with anchor(0.5, 1.0): origin = bottom-center.
+          // LimeZu frames are 16×32px; character art fills roughly the lower 26px, ±6px wide.
+          body.hitArea = new Rectangle(-6, -26, 12, 26);
           body.cursor = "pointer";
           const deskId = desk.id;
           const officeSlug = office.slug;
           body.on("pointertap", (ev) => {
+            if (ev.button !== 0) return;
             emitAgentClick(officeSlug, deskId, body);
             ev.stopPropagation();
           });
           body.on("pointerdown", (ev) => {
+            if (ev.button !== 0) return;
             if (htmlDragActive) return;
             ev.stopPropagation();
             const gpos = ev.global;
@@ -695,10 +690,11 @@ export default function Station({
           });
           furniture.addChild(check);
 
-          const nameTag = buildNameTag(agent.name);
-          const nameTagY = agentBottomY - body.height - 4;
+          const nameTag = buildNameTag(agent.name, agent.role, agent.name);
+          const nameTagY = agentBottomY - body.height - 46;
           nameTag.position.set(agentCenterX, nameTagY);
           nameTag.zIndex = zBase + 7;
+          nameTag.eventMode = "none";
           furniture.addChild(nameTag);
 
           // Context warning overlay (⚠) — shown when model ctx ≥ 80%
@@ -717,6 +713,20 @@ export default function Station({
           ctxWarning.visible = false;
           furniture.addChild(ctxWarning);
 
+          // Drop shadow — stays on ground, squishes during bounce
+          const shadow = new Graphics();
+          shadow.ellipse(0, 0, (tw * 0.38), (th * 0.18)).fill({ color: 0x000000, alpha: 0.28 });
+          shadow.position.set(agentCenterX, agentBottomY - 2);
+          shadow.zIndex = zBase + 2;
+          furniture.addChild(shadow);
+
+          // Desk glow — colored halo behind desk tile, driven by status
+          const deskGlow = new Graphics();
+          deskGlow.circle(0, 0, Math.max(tw, th) * 0.72).fill({ color: 0xffffff, alpha: 0 });
+          deskGlow.position.set(x + tw / 2, y + th / 2);
+          deskGlow.zIndex = zBase;
+          furniture.addChild(deskGlow);
+
           agentSprites.set(agent.id, {
             body,
             pip,
@@ -724,9 +734,19 @@ export default function Station({
             check,
             ctxWarning,
             nameTag,
+            shadow,
+            deskGlow,
             indicatorBaseY,
             agentId: agent.id,
             model: agent.model ?? null,
+            restX: agentCenterX,
+            restY: agentBottomY,
+            lastKind: undefined,
+            anim: { type: "none", t: 0 },
+            allFrames: premadeData.frames,
+            idleFacing: desk.facing,
+            wanderTimer: 2 + Math.random() * 6,
+            wanderTarget: null,
           });
         }
 
@@ -771,6 +791,7 @@ export default function Station({
 
         // Module background click: focus this module + deselect desk
         moduleContainer.on("pointertap", (ev) => {
+          if (ev.button !== 0) return;
           if (ev.target === moduleContainer || ev.target === roomBg || ev.target === roomFg) {
             onModuleFocusRef.current?.(office.slug);
           }
@@ -796,6 +817,7 @@ export default function Station({
         Object.assign(moduleHandleForBody, handle);
         // Attach ghost to module so it shares local coords
         (handle as ModuleHandle & { ghost: InstanceType<typeof Graphics> }).ghost = ghost;
+        (moduleHandleForBody as ModuleHandle & { ghost: InstanceType<typeof Graphics> }).ghost = ghost;
         modules.push(handle);
       }
 
@@ -865,16 +887,17 @@ export default function Station({
 
       // Click on empty space (not on any module) = defocus (overview)
       app.stage.on("pointertap", (ev) => {
+        if (ev.button !== 0) return;
         // Only fire if the tap landed on the stage itself, not a module/sprite
         if (ev.target === app.stage) {
           onSelectRef.current?.(null);
         }
       });
 
-      // Camera pan: pointerdown on empty stage, pointermove pans
+      // Camera pan: left-click or middle-click anywhere (agents stop propagation so they won't trigger this)
       app.stage.on("pointerdown", (ev) => {
         if (drag) return;
-        if (ev.target !== app.stage) return;
+        if (ev.button !== 0 && ev.button !== 1) return;
         const gpos = ev.global;
         pan = {
           startPointerX: gpos.x,
@@ -911,6 +934,16 @@ export default function Station({
           if (!drag.started) {
             if (Math.sqrt(dx * dx + dy * dy) < 4) return;
             drag.started = true;
+            // Switch to walk animation
+            const aidWalk = drag.module.deskOfAgent.get(drag.deskId);
+            if (aidWalk) {
+              const sp = drag.module.agentSprites.get(aidWalk);
+              if (sp) {
+                sp.body.textures = sp.allFrames.walkS;
+                sp.body.animationSpeed = 0.14;
+                sp.body.play();
+              }
+            }
           }
           // Convert to module-local coords
           const localPos = drag.module.container.toLocal(gpos);
@@ -921,8 +954,9 @@ export default function Station({
             if (sprites) {
               sprites.nameTag.position.set(
                 localPos.x,
-                localPos.y - drag.body.height - 4,
+                localPos.y - drag.body.height - 46,
               );
+              sprites.shadow.position.set(localPos.x, localPos.y - 2);
             }
           }
           const snapGX = Math.floor(localPos.x / drag.module.tw);
@@ -976,7 +1010,9 @@ export default function Station({
         if (!aid) return;
         const sprites = module.agentSprites.get(aid);
         if (!sprites) return;
-        sprites.nameTag.position.set(bodyX, bodyY - bodyH - 4);
+        sprites.restX = bodyX;
+        sprites.restY = bodyY;
+        sprites.nameTag.position.set(bodyX, bodyY - bodyH - 46);
       };
 
       const endDrag = (ev: { global: { x: number; y: number } } | null) => {
@@ -987,6 +1023,17 @@ export default function Station({
           d.module as ModuleHandle & { ghost: InstanceType<typeof Graphics> }
         ).ghost;
         ghost.visible = false;
+
+        // Restore idle animation regardless of drop outcome
+        const aidEnd = d.module.deskOfAgent.get(d.deskId);
+        if (aidEnd) {
+          const sp = d.module.agentSprites.get(aidEnd);
+          if (sp) {
+            sp.body.textures = idleFramesForFacing(sp.allFrames, sp.idleFacing);
+            sp.body.animationSpeed = 0.08;
+            sp.body.play();
+          }
+        }
 
         if (!d.started || !ev) {
           d.body.position.set(d.origX, d.origY);
@@ -1139,6 +1186,38 @@ export default function Station({
               sprites.exclamation.visible = kind === "awaiting_input";
               sprites.check.visible = kind === "done_unacked";
               sprites.pip.visible = busy && !kind;
+              // Desk glow
+              const glowR = Math.max(m.tw, m.th) * 0.72;
+              sprites.deskGlow.clear();
+              if (kind === "awaiting_input") {
+                sprites.deskGlow.circle(0, 0, glowR).fill({ color: 0xFACC15, alpha: 0.22 });
+              } else if (busy) {
+                sprites.deskGlow.circle(0, 0, glowR).fill({ color: 0xF59E0B, alpha: 0.18 });
+              } else if (kind === "done_unacked") {
+                sprites.deskGlow.circle(0, 0, glowR).fill({ color: 0x22C55E, alpha: 0.15 });
+              }
+              if (kind !== sprites.lastKind) {
+                // Cancel any active wander so the agent snaps to attention
+                if (sprites.wanderTarget) {
+                  sprites.wanderTarget = null;
+                  sprites.body.x = sprites.restX;
+                  sprites.body.y = sprites.restY;
+                  sprites.shadow.position.set(sprites.restX, sprites.restY - 2);
+                  sprites.nameTag.position.set(sprites.restX, sprites.restY - sprites.body.height - 46);
+                  sprites.body.textures = idleFramesForFacing(sprites.allFrames, sprites.idleFacing);
+                  sprites.body.animationSpeed = 0.08;
+                  sprites.body.play();
+                  sprites.wanderTimer = 5 + Math.random() * 8;
+                }
+                if (kind === "done_unacked") sprites.anim = { type: "bounce", t: 0 };
+                else if (kind === "awaiting_input") sprites.anim = { type: "shake", t: 0 };
+                else {
+                  sprites.anim = { type: "none", t: 0 };
+                  sprites.body.x = sprites.restX;
+                  sprites.body.y = sprites.restY;
+                }
+                sprites.lastKind = kind;
+              }
               // Context warning overlay
               const ctxInfo = contextUsageRef.current?.get(agentId);
               sprites.ctxWarning.visible = ctxInfo
@@ -1162,10 +1241,111 @@ export default function Station({
           }
         }
 
+        // Agent status animations (bounce on done, shake on awaiting input)
+        for (const m of modules) {
+          for (const sprites of m.agentSprites.values()) {
+            const { anim } = sprites;
+            if (anim.type === "none") continue;
+            // Skip while agent is being dragged
+            if (drag && drag.body === sprites.body) continue;
+            anim.t += app.ticker.deltaTime / 60;
+            if (anim.type === "bounce") {
+              // Loop: gentle hop every ~1s
+              const cycle = anim.t % 1.0;
+              const jumpH = Math.abs(Math.sin(cycle * Math.PI)) * 10;
+              sprites.body.y = sprites.restY - jumpH;
+              // Shadow squishes as agent rises
+              const shadowT = 1 - jumpH / 10;
+              sprites.shadow.scale.set(0.6 + 0.4 * shadowT, 0.6 + 0.4 * shadowT);
+              sprites.shadow.alpha = 0.1 + 0.18 * shadowT;
+            } else {
+              // Loop: rapid shake for 0.45s, then pause until 1.2s, repeat
+              const cycle = anim.t % 1.2;
+              if (cycle < 0.45) {
+                const decay = 1 - cycle / 0.45;
+                const shakeX = Math.sin(cycle * Math.PI * 16) * 5 * (0.4 + 0.6 * decay);
+                sprites.body.x = sprites.restX + shakeX;
+              } else {
+                sprites.body.x = sprites.restX;
+              }
+            }
+          }
+        }
+
+        // Idle wander — agents take a short walk and return to their desk
+        {
+          const WALK_SPEED = 70; // px/s
+          const dt = app.ticker.deltaTime / 60;
+          const oppositeDir = (d: "N" | "E" | "S" | "W") =>
+            d === "N" ? "S" : d === "S" ? "N" : d === "E" ? "W" : "E";
+
+          for (const m of modules) {
+            if (m.slug === "operations") continue;              // wander disabled for ops
+            for (const sprites of m.agentSprites.values()) {
+              if (drag && drag.body === sprites.body) continue; // dragging
+              if (sprites.anim.type !== "none") continue;       // bouncing/shaking
+              if (sprites.lastKind) continue;                   // has active status
+
+              if (sprites.wanderTarget) {
+                const { x: tx, y: ty, dir, returning } = sprites.wanderTarget;
+                const dx = tx - sprites.body.x;
+                const dy = ty - sprites.body.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist < 1.5) {
+                  if (returning) {
+                    // Arrived home — restore idle
+                    sprites.body.x = sprites.restX;
+                    sprites.body.y = sprites.restY;
+                    sprites.shadow.position.set(sprites.restX, sprites.restY - 2);
+                    sprites.nameTag.position.set(sprites.restX, sprites.restY - sprites.body.height - 46);
+                    sprites.body.textures = idleFramesForFacing(sprites.allFrames, sprites.idleFacing);
+                    sprites.body.animationSpeed = 0.08;
+                    sprites.body.play();
+                    sprites.wanderTarget = null;
+                    sprites.wanderTimer = 4 + Math.random() * 8;
+                  } else {
+                    // Arrived at wander point — head back
+                    const retDir = oppositeDir(dir);
+                    sprites.wanderTarget = { x: sprites.restX, y: sprites.restY, dir: retDir, returning: true };
+                    sprites.body.textures = sprites.allFrames[`walk${retDir}`];
+                    sprites.body.animationSpeed = 0.14;
+                    sprites.body.play();
+                  }
+                } else {
+                  const step = Math.min(WALK_SPEED * dt, dist);
+                  sprites.body.x += (dx / dist) * step;
+                  sprites.body.y += (dy / dist) * step;
+                  sprites.shadow.position.set(sprites.body.x, sprites.body.y - 2);
+                  sprites.nameTag.position.set(sprites.body.x, sprites.body.y - sprites.body.height - 46);
+                }
+              } else {
+                sprites.wanderTimer -= dt;
+                if (sprites.wanderTimer <= 0) {
+                  const dirs = ["N", "E", "S", "W"] as const;
+                  const dir = dirs[Math.floor(Math.random() * 4)];
+                  const tileDist = m.tw * (1.5 + Math.random() * 2.5);
+                  const tx = sprites.restX + (dir === "E" ? tileDist : dir === "W" ? -tileDist : 0);
+                  const ty = sprites.restY + (dir === "S" ? tileDist : dir === "N" ? -tileDist : 0);
+                  // Keep within module world bounds with a tile-sized margin
+                  if (tx > m.tw && ty > m.th && tx < m.worldW - m.tw && ty < m.worldH - m.th) {
+                    sprites.wanderTarget = { x: tx, y: ty, dir, returning: false };
+                    sprites.body.textures = sprites.allFrames[`walk${dir}`];
+                    sprites.body.animationSpeed = 0.14;
+                    sprites.body.play();
+                  } else {
+                    sprites.wanderTimer = 2 + Math.random() * 3;
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // Subtle bloom pulse when a module is focused
         bloomPhase += 0.01 * app.ticker.deltaTime;
         bloom.bloomScale =
-          0.8 + Math.sin(bloomPhase) * 0.08 + (focusedRef.current ? 0.1 : 0);
+          0.15 + Math.sin(bloomPhase) * 0.02 + (focusedRef.current ? 0.03 : 0);
 
         // Emit agent positions for ambient bubbles (every ~30 frames)
         if (onAgentPositionsRef.current && Math.round(bloomPhase * 10) % 30 === 0) {

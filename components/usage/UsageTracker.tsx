@@ -58,7 +58,7 @@ export default function UsageTracker() {
     <div className="border-t border-white/10 bg-zinc-950/60 px-4 py-1.5 font-mono text-[10px] text-white/60">
       <div className="flex items-center justify-between">
         <span className="uppercase tracking-wider text-white/40">
-          5h usage
+          5h tokens (i/o)
         </span>
         <span className={tone.text}>
           {fmtTokens(usage.tokens)} / {fmtTokens(usage.limit)} ·{" "}

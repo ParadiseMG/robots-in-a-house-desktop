@@ -4,7 +4,7 @@ import { db } from "@/server/db";
 export const dynamic = "force-dynamic";
 
 const WINDOW_MS = 5 * 60 * 60 * 1000; // 5 hours
-const LIMIT_TOKENS = 5_000_000;
+const LIMIT_TOKENS = 500_000;
 
 export async function GET() {
   const since = Date.now() - WINDOW_MS;
@@ -30,11 +30,7 @@ export async function GET() {
       cache_creation_tokens: number;
     };
 
-  const tokens =
-    row.input_tokens +
-    row.output_tokens +
-    row.cache_read_tokens +
-    row.cache_creation_tokens;
+  const tokens = row.input_tokens + row.output_tokens;
 
   return NextResponse.json({
     windowMs: WINDOW_MS,

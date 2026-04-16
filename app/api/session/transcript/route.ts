@@ -12,36 +12,57 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const officeSlug = url.searchParams.get("office");
   const agentId = url.searchParams.get("agentId");
+  const assignmentId = url.searchParams.get("assignmentId");
   if (!officeSlug || !agentId) {
     return NextResponse.json({ error: "missing office/agentId" }, { status: 400 });
   }
 
   const d = db();
-  const lastReset = d
-    .prepare(
-      `SELECT reset_at FROM session_resets
-       WHERE office_slug = ? AND agent_id = ?
-       ORDER BY reset_at DESC LIMIT 1`,
-    )
-    .get(officeSlug, agentId) as { reset_at: number } | undefined;
-  const cutoff = lastReset?.reset_at ?? 0;
+  let cutoff = 0;
+  if (!assignmentId) {
+    const lastReset = d
+      .prepare(
+        `SELECT reset_at FROM session_resets
+         WHERE office_slug = ? AND agent_id = ?
+         ORDER BY reset_at DESC LIMIT 1`,
+      )
+      .get(officeSlug, agentId) as { reset_at: number } | undefined;
+    cutoff = lastReset?.reset_at ?? 0;
+  }
 
-  const runs = d
-    .prepare(
-      `SELECT r.id as run_id, r.started_at, r.status, t.title, t.body
-       FROM agent_runs r
-       JOIN assignments a ON a.id = r.assignment_id
-       JOIN tasks t ON t.id = a.task_id
-       WHERE r.office_slug = ? AND r.agent_id = ? AND r.started_at > ?
-       ORDER BY r.started_at ASC`,
-    )
-    .all(officeSlug, agentId, cutoff) as Array<{
-      run_id: string;
-      started_at: number;
-      status: string;
-      title: string;
-      body: string;
-    }>;
+  const runs = assignmentId
+    ? (d
+        .prepare(
+          `SELECT r.id as run_id, r.started_at, r.status, t.title, t.body
+           FROM agent_runs r
+           JOIN assignments a ON a.id = r.assignment_id
+           JOIN tasks t ON t.id = a.task_id
+           WHERE r.assignment_id = ?
+           ORDER BY r.started_at ASC`,
+        )
+        .all(assignmentId) as Array<{
+          run_id: string;
+          started_at: number;
+          status: string;
+          title: string;
+          body: string;
+        }>)
+    : (d
+        .prepare(
+          `SELECT r.id as run_id, r.started_at, r.status, t.title, t.body
+           FROM agent_runs r
+           JOIN assignments a ON a.id = r.assignment_id
+           JOIN tasks t ON t.id = a.task_id
+           WHERE r.office_slug = ? AND r.agent_id = ? AND r.started_at > ?
+           ORDER BY r.started_at ASC`,
+        )
+        .all(officeSlug, agentId, cutoff) as Array<{
+          run_id: string;
+          started_at: number;
+          status: string;
+          title: string;
+          body: string;
+        }>);
 
   const messages: Message[] = [];
 

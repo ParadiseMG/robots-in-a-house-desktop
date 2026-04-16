@@ -4,20 +4,18 @@ import { Command } from "cmdk";
 import { useEffect, useState } from "react";
 import type { AgentConfig } from "@/lib/office-types";
 
+type OfficeEntry = { slug: string; name: string; agents: AgentConfig[] };
+
 type Props = {
-  slug: "paradise" | "dontcall";
-  otherSlug: "paradise" | "dontcall";
-  otherName: string;
-  agents: AgentConfig[];
-  onSwitchOffice: () => void;
+  slug: string;
+  allOffices: OfficeEntry[];
+  onSwitchOffice: (slug: string) => void;
   onFocusAgent: (deskId: string) => void;
 };
 
 export default function CommandPalette({
   slug,
-  otherSlug,
-  otherName,
-  agents,
+  allOffices,
   onSwitchOffice,
   onFocusAgent,
 }: Props) {
@@ -37,6 +35,10 @@ export default function CommandPalette({
   }, []);
 
   if (!open) return null;
+
+  const otherOffices = allOffices.filter((o) => o.slug !== slug);
+  const currentOffice = allOffices.find((o) => o.slug === slug);
+  const agents = currentOffice?.agents ?? [];
 
   return (
     <div
@@ -59,19 +61,22 @@ export default function CommandPalette({
             </Command.Empty>
 
             <Command.Group
-              heading="office"
+              heading="offices"
               className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-white/40"
             >
-              <Command.Item
-                value={`switch office ${otherSlug} ${otherName}`}
-                onSelect={() => {
-                  onSwitchOffice();
-                  setOpen(false);
-                }}
-                className="flex cursor-pointer items-center gap-2 rounded px-3 py-2 text-sm text-white/80 data-[selected=true]:bg-white/10 data-[selected=true]:text-white"
-              >
-                switch → {otherName}
-              </Command.Item>
+              {otherOffices.map((o) => (
+                <Command.Item
+                  key={o.slug}
+                  value={`switch office ${o.slug} ${o.name}`}
+                  onSelect={() => {
+                    onSwitchOffice(o.slug);
+                    setOpen(false);
+                  }}
+                  className="flex cursor-pointer items-center gap-2 rounded px-3 py-2 text-sm text-white/80 data-[selected=true]:bg-white/10 data-[selected=true]:text-white"
+                >
+                  switch → {o.name}
+                </Command.Item>
+              ))}
             </Command.Group>
 
             <Command.Group

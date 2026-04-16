@@ -34,10 +34,11 @@ type Props = {
   agents?: AgentEntry[];
   rosterEntries?: RosterEntry[];
   offices?: Record<string, OfficeConfig>;
+  deskRunStatus?: ReadonlyMap<string, string>;
+  onAckDesk?: (deskId: string) => void;
 };
 
 const MIN_HEIGHT = 120;
-const MAX_HEIGHT = 600;
 const DEFAULT_HEIGHT = 280;
 const COLLAPSED_HEIGHT = 36;
 
@@ -51,7 +52,7 @@ export function DockTabsProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function ChatDock({ agents = [], rosterEntries = [], offices = {} }: Props) {
+export default function ChatDock({ agents = [], rosterEntries = [], offices = {}, deskRunStatus, onAckDesk }: Props) {
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [collapsed, setCollapsed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -63,7 +64,8 @@ export default function ChatDock({ agents = [], rosterEntries = [], offices = {}
     const onMove = (mv: MouseEvent) => {
       if (!dragRef.current) return;
       const dy = dragRef.current.startY - mv.clientY;
-      const newH = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, dragRef.current.startH + dy));
+      const maxH = Math.floor(window.innerHeight * 0.85);
+      const newH = Math.min(maxH, Math.max(MIN_HEIGHT, dragRef.current.startH + dy));
       setHeight(newH);
       if (collapsed) setCollapsed(false);
     };
@@ -96,6 +98,8 @@ export default function ChatDock({ agents = [], rosterEntries = [], offices = {}
         collapsed={collapsed}
         onToggleCollapse={() => setCollapsed((v) => !v)}
         onOpenPicker={() => setPickerOpen((v) => !v)}
+        deskRunStatus={deskRunStatus}
+        onAckDesk={onAckDesk}
       />
 
       {!collapsed && (

@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n next,runner -c cyan,magenta \"next dev\" \"tsx watch server/agent-runner.ts\"",
+    "dev": "concurrently -n next,runner -c cyan,magenta \"next dev\" \"tsx watch --ignore 'config/**/*.json' --ignore 'data/**/*' --ignore 'agent-workspaces/**/*' server/agent-runner.ts\"",
     "dev:next": "next dev",
-    "dev:runner": "tsx watch server/agent-runner.ts",
+    "dev:runner": "tsx watch --ignore 'config/**/*.json' --ignore 'data/**/*' --ignore 'agent-workspaces/**/*' server/agent-runner.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -16,6 +16,7 @@
     "cmdk": "^1.1.1",
     "concurrently": "^9.2.1",
     "next": "16.2.3",
+    "pixi-filters": "^6.1.5",
     "pixi.js": "^8.18.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",

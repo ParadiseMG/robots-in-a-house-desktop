@@ -21,6 +21,7 @@ type RunInfo = {
 type Props = {
   agent: AgentInfo;
   run?: RunInfo | null;
+  queueDepth?: number;
   /** Client-space position of the sprite centre */
   anchorX: number;
   anchorY: number;
@@ -44,7 +45,7 @@ const statusColor = (s: string | null) => {
   return "text-white/40";
 };
 
-export default function AgentHoverCard({ agent, run, anchorX, anchorY, onDismiss }: Props) {
+export default function AgentHoverCard({ agent, run, queueDepth, anchorX, anchorY, onDismiss }: Props) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
@@ -63,22 +64,14 @@ export default function AgentHoverCard({ agent, run, anchorX, anchorY, onDismiss
     setPos({ left, top });
   }, [anchorX, anchorY]);
 
-  // Dismiss on outside click or escape
+  // Dismiss on escape
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onDismiss();
     };
-    const onDown = (e: MouseEvent) => {
-      if (cardRef.current && !cardRef.current.contains(e.target as Node)) {
-        onDismiss();
-      }
-    };
     window.addEventListener("keydown", onKey);
-    const t = window.setTimeout(() => window.addEventListener("mousedown", onDown), 0);
     return () => {
       window.removeEventListener("keydown", onKey);
-      window.clearTimeout(t);
-      window.removeEventListener("mousedown", onDown);
     };
   }, [onDismiss]);
 
@@ -93,7 +86,7 @@ export default function AgentHoverCard({ agent, run, anchorX, anchorY, onDismiss
   return (
     <div
       ref={cardRef}
-      className="fixed z-50 w-52 rounded border border-white/20 bg-zinc-900/95 p-2.5 shadow-2xl backdrop-blur-sm"
+      className="fixed z-50 w-52 rounded border border-white/20 bg-zinc-900/95 p-2.5 shadow-2xl backdrop-blur-sm pointer-events-none"
       style={pos ? { left: pos.left, top: pos.top } : { left: anchorX, top: anchorY, opacity: 0 }}
     >
       {/* Agent identity */}
@@ -142,6 +135,13 @@ export default function AgentHoverCard({ agent, run, anchorX, anchorY, onDismiss
               style={{ width: `${Math.max(2, ctxPct)}%` }}
             />
           </div>
+        </div>
+      )}
+
+      {/* Queue depth */}
+      {queueDepth != null && queueDepth > 0 && (
+        <div className="mt-1.5 font-mono text-[9px] text-amber-300/70">
+          {queueDepth} queued
         </div>
       )}
 

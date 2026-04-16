@@ -1,13 +1,25 @@
 import { NextResponse } from "next/server";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { db } from "@/server/db";
-import paradiseRaw from "@/config/paradise.office.json";
-import dontcallRaw from "@/config/dontcall.office.json";
 import type { OfficeConfig } from "@/lib/office-types";
 
-const offices: Record<string, OfficeConfig> = {
-  paradise: paradiseRaw as OfficeConfig,
-  dontcall: dontcallRaw as OfficeConfig,
-};
+const VALID_SLUGS = new Set(["paradise", "dontcall", "operations"]);
+
+async function loadOffice(slug: string): Promise<OfficeConfig | null> {
+  if (!VALID_SLUGS.has(slug)) return null;
+  try {
+    const raw = await fs.readFile(
+      path.join(process.cwd(), "config", `${slug}.office.json`),
+      "utf-8",
+    );
+    return JSON.parse(raw) as OfficeConfig;
+  } catch {
+    return null;
+  }
+}
+
+export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -16,7 +28,7 @@ export async function GET(req: Request) {
   if (!officeSlug || !deskId) {
     return NextResponse.json({ error: "missing office/deskId" }, { status: 400 });
   }
-  const office = offices[officeSlug];
+  const office = await loadOffice(officeSlug);
   if (!office) return NextResponse.json({ error: "office not found" }, { status: 404 });
 
   const desk = office.desks.find((d) => d.id === deskId);
@@ -134,6 +146,7 @@ export async function GET(req: Request) {
       role: agent.role,
       isReal: agent.isReal,
       model: agent.model ?? null,
+      isHead: agent.isHead ?? false,
     },
     desk: { id: desk.id, facing: desk.facing },
     room: room ? { id: room.id, name: room.name } : null,

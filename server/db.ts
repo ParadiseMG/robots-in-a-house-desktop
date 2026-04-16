@@ -1,8 +1,9 @@
 import Database from "better-sqlite3";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import paradiseRaw from "../config/paradise.office.json" with { type: "json" };
 import dontcallRaw from "../config/dontcall.office.json" with { type: "json" };
+import operationsRaw from "../config/operations.office.json" with { type: "json" };
 import type { OfficeConfig } from "../lib/office-types.js";
 
 const DB_DIR = join(process.cwd(), "data");
@@ -59,7 +60,8 @@ function migrate(d: Database.Database) {
       input_tokens INTEGER,
       output_tokens INTEGER,
       cache_read_tokens INTEGER,
-      cache_creation_tokens INTEGER
+      cache_creation_tokens INTEGER,
+      acknowledged_at INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_runs_assignment ON agent_runs(assignment_id);
     CREATE INDEX IF NOT EXISTS idx_runs_agent ON agent_runs(agent_id, started_at);
@@ -80,6 +82,36 @@ function migrate(d: Database.Database) {
       reset_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_resets_agent ON session_resets(office_slug, agent_id, reset_at);
+
+    CREATE TABLE IF NOT EXISTS meetings (
+      id TEXT PRIMARY KEY,
+      office_slug TEXT NOT NULL,
+      task_id TEXT NOT NULL REFERENCES tasks(id),
+      convened_by TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      convened_at INTEGER NOT NULL,
+      target_rounds INTEGER NOT NULL DEFAULT 1,
+      synthesis_run_id TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_meetings_office ON meetings(office_slug, convened_at);
+
+    CREATE TABLE IF NOT EXISTS meeting_attendees (
+      meeting_id TEXT NOT NULL REFERENCES meetings(id),
+      agent_id TEXT NOT NULL,
+      assignment_id TEXT NOT NULL REFERENCES assignments(id),
+      PRIMARY KEY (meeting_id, agent_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_meeting_attendees_assignment ON meeting_attendees(assignment_id);
+
+    CREATE TABLE IF NOT EXISTS prompt_queue (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      office_slug TEXT NOT NULL,
+      title TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      queued_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_prompt_queue_agent ON prompt_queue(agent_id, office_slug, queued_at);
   `);
 
   // Idempotent column additions for agent_runs (pre-existing DBs)
@@ -94,6 +126,23 @@ function migrate(d: Database.Database) {
   add("cache_read_tokens", "cache_read_tokens INTEGER");
   add("cache_creation_tokens", "cache_creation_tokens INTEGER");
   add("acknowledged_at", "acknowledged_at INTEGER");
+  add("delegated_by_agent_id", "delegated_by_agent_id TEXT");
+  add("delegated_by_run_id", "delegated_by_run_id TEXT");
+  // Index for roster query: count active children per parent
+  d.exec(
+    "CREATE INDEX IF NOT EXISTS idx_runs_delegated_by ON agent_runs(delegated_by_agent_id, status)",
+  );
+
+  // Idempotent column additions for meetings (pre-existing DBs)
+  const mcols = (
+    d.prepare("PRAGMA table_info(meetings)").all() as Array<{ name: string }>
+  ).map((r) => r.name);
+  if (!mcols.includes("target_rounds")) {
+    d.exec("ALTER TABLE meetings ADD COLUMN target_rounds INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!mcols.includes("synthesis_run_id")) {
+    d.exec("ALTER TABLE meetings ADD COLUMN synthesis_run_id TEXT");
+  }
 }
 
 export function getResumeSessionId(
@@ -132,6 +181,8 @@ function seedIfEmpty(d: Database.Database) {
     ["dontcall", "Lead triage — new inbound SMS", "Classify, dedupe, tag by trade."],
     ["dontcall", "Route 3 queued jobs to tradesmen", "Match by zip + availability."],
     ["dontcall", "Nightly callback list", "Pull queue, sort by priority."],
+    ["operations", "Check deployment pipeline status", "Review the CI/CD pipeline for all environments. Report any failing builds, stuck deployments, or stale preview URLs."],
+    ["operations", "Audit environment variables", "Compare environment variables across dev, staging, and production. Flag any missing or inconsistent values."],
   ];
   const insertMany = d.transaction((rows: typeof seed) => {
     for (const [office, title, body] of rows) {
@@ -142,14 +193,29 @@ function seedIfEmpty(d: Database.Database) {
 }
 
 // ---- Helpers for config lookups (not persisted — offices are config-driven) ----
+// Read fresh from disk each call so newly-created agents are visible without a
+// server restart. Fall back to the bundled import if the file read fails.
 
-const OFFICES: Record<string, OfficeConfig> = {
+const FALLBACK_OFFICES: Record<string, OfficeConfig> = {
   paradise: paradiseRaw as OfficeConfig,
   dontcall: dontcallRaw as OfficeConfig,
+  operations: operationsRaw as OfficeConfig,
 };
 
+function loadOffice(officeSlug: string): OfficeConfig | null {
+  try {
+    const raw = readFileSync(
+      join(process.cwd(), "config", `${officeSlug}.office.json`),
+      "utf-8",
+    );
+    return JSON.parse(raw) as OfficeConfig;
+  } catch {
+    return FALLBACK_OFFICES[officeSlug] ?? null;
+  }
+}
+
 export function getAgent(officeSlug: string, agentId: string) {
-  const office = OFFICES[officeSlug];
+  const office = loadOffice(officeSlug);
   if (!office) return null;
   const agent = office.agents.find((a) => a.id === agentId);
   if (!agent) return null;
@@ -157,9 +223,10 @@ export function getAgent(officeSlug: string, agentId: string) {
 }
 
 export function getDeskForAgent(officeSlug: string, agentId: string) {
-  const agent = getAgent(officeSlug, agentId);
+  const office = loadOffice(officeSlug);
+  if (!office) return null;
+  const agent = office.agents.find((a) => a.id === agentId);
   if (!agent) return null;
-  const office = OFFICES[officeSlug];
   return office.desks.find((desk) => desk.id === agent.deskId) ?? null;
 }
 
@@ -200,6 +267,8 @@ export type AgentRunRow = {
   cache_read_tokens: number | null;
   cache_creation_tokens: number | null;
   acknowledged_at: number | null;
+  delegated_by_agent_id: string | null;
+  delegated_by_run_id: string | null;
 };
 
 export type RunEventRow = {
@@ -209,3 +278,107 @@ export type RunEventRow = {
   kind: "assistant" | "tool_use" | "tool_result" | "status";
   payload: string;
 };
+
+export type PromptQueueRow = {
+  id: string;
+  agent_id: string;
+  office_slug: string;
+  title: string;
+  prompt: string;
+  queued_at: number;
+};
+
+/** Returns true if the agent has an active (non-terminal) run. */
+export function agentIsBusy(officeSlug: string, agentId: string): boolean {
+  const row = db()
+    .prepare(
+      `SELECT r.id FROM agent_runs r
+       JOIN assignments a ON a.id = r.assignment_id
+       WHERE r.agent_id = ? AND r.office_slug = ? AND r.status IN ('starting', 'running', 'awaiting_input')
+       LIMIT 1`,
+    )
+    .get(agentId, officeSlug) as { id: string } | undefined;
+  return !!row;
+}
+
+/** Queue a prompt for an agent. Returns the queue entry id. */
+export function enqueuePrompt(
+  agentId: string,
+  officeSlug: string,
+  title: string,
+  prompt: string,
+): string {
+  const id = crypto.randomUUID();
+  db()
+    .prepare(
+      "INSERT INTO prompt_queue (id, agent_id, office_slug, title, prompt, queued_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .run(id, agentId, officeSlug, title, prompt, Date.now());
+  return id;
+}
+
+/** Pop the next queued prompt for an agent (FIFO). Returns null if empty. */
+export function dequeuePrompt(
+  agentId: string,
+  officeSlug: string,
+): PromptQueueRow | null {
+  const d = db();
+  const row = d
+    .prepare(
+      "SELECT * FROM prompt_queue WHERE agent_id = ? AND office_slug = ? ORDER BY queued_at ASC LIMIT 1",
+    )
+    .get(agentId, officeSlug) as PromptQueueRow | undefined;
+  if (!row) return null;
+  d.prepare("DELETE FROM prompt_queue WHERE id = ?").run(row.id);
+  return row;
+}
+
+/**
+ * Count active (non-terminal) runs that were delegated by the given agent.
+ * Used to visualize satellites around a delegating "boss" agent.
+ */
+export function activeDelegationsFor(
+  officeSlug: string,
+  delegatorAgentId: string,
+): number {
+  const row = db()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM agent_runs
+       WHERE delegated_by_agent_id = ? AND office_slug = ?
+         AND status IN ('starting', 'running', 'awaiting_input')`,
+    )
+    .get(delegatorAgentId, officeSlug) as { n: number };
+  return row.n;
+}
+
+/**
+ * Batch variant of activeDelegationsFor — one query per office, returns a map
+ * of delegator agentId -> count. Roster renders every agent on every poll,
+ * so avoid N+1.
+ */
+export function activeDelegationsByDelegator(
+  officeSlug: string,
+): Map<string, number> {
+  const rows = db()
+    .prepare(
+      `SELECT delegated_by_agent_id AS id, COUNT(*) AS n FROM agent_runs
+       WHERE office_slug = ?
+         AND delegated_by_agent_id IS NOT NULL
+         AND status IN ('starting', 'running', 'awaiting_input')
+       GROUP BY delegated_by_agent_id`,
+    )
+    .all(officeSlug) as Array<{ id: string; n: number }>;
+  const m = new Map<string, number>();
+  for (const r of rows) m.set(r.id, r.n);
+  return m;
+}
+
+/** Count queued prompts for an agent. */
+export function queueDepth(officeSlug: string, agentId: string): number {
+  const row = db()
+    .prepare(
+      "SELECT COUNT(*) as n FROM prompt_queue WHERE agent_id = ? AND office_slug = ?",
+    )
+    .get(agentId, officeSlug) as { n: number };
+  return row.n;
+}

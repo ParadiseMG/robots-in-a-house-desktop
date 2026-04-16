@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import paradiseRaw from "@/config/paradise.office.json";
 import dontcallRaw from "@/config/dontcall.office.json";
+import operationsRaw from "@/config/operations.office.json";
 import stationRaw from "@/config/station.json";
 import type {
   OfficeConfig,
@@ -10,7 +11,6 @@ import type {
   IndicatorKind,
 } from "@/lib/office-types";
 import Station from "@/components/pixi/Station";
-import StationMinimap from "@/components/station/StationMinimap";
 import type { Task } from "@/components/tray/TaskTray";
 import PromptBar from "@/components/prompt-bar/PromptBar";
 import CommandPalette from "@/components/palette/CommandPalette";
@@ -19,14 +19,17 @@ import SpriteBubble from "@/components/sprite-bubble/SpriteBubble";
 import ChatDock, { DockTabsProvider } from "@/components/dock/ChatDock";
 import { useDockTabs } from "@/hooks/useDockTabs";
 import AgentHoverCard from "@/components/canvas/AgentHoverCard";
+import ActiveWarRooms from "@/components/events/ActiveWarRooms";
+import NotificationCenter from "@/components/notifications/NotificationCenter";
 import { useAmbientStream } from "@/hooks/useAmbientStream";
 
 const offices: Record<string, OfficeConfig> = {
   paradise: paradiseRaw as OfficeConfig,
   dontcall: dontcallRaw as OfficeConfig,
+  operations: operationsRaw as OfficeConfig,
 };
 const station = stationRaw as StationConfig;
-const order = ["paradise", "dontcall"] as const;
+const order = ["operations", "paradise", "dontcall"] as const;
 type OfficeSlug = (typeof order)[number];
 
 const ROSTER_POLL_MS = 5_000;
@@ -49,6 +52,7 @@ type RosterEntry = {
     acknowledgedAt: number | null;
     inputQuestion: string | null;
   } | null;
+  queueDepth: number;
 };
 
 export default function Home() {
@@ -158,7 +162,7 @@ function HomeInner() {
   // Restore sidebar slug + desk selection from localStorage on mount
   useEffect(() => {
     const stored = localStorage.getItem("ri-office") as OfficeSlug | null;
-    if (stored === "paradise" || stored === "dontcall") {
+    if (stored === "paradise" || stored === "dontcall" || stored === "operations") {
       setSidebarSlug(stored);
       const storedDesk = localStorage.getItem(`ri-desk-${stored}`);
       if (storedDesk) setSelectedDeskId(storedDesk);
@@ -166,7 +170,7 @@ function HomeInner() {
     const storedFocus = localStorage.getItem(
       "ri-focus",
     ) as OfficeSlug | "overview" | null;
-    if (storedFocus === "paradise" || storedFocus === "dontcall") {
+    if (storedFocus === "paradise" || storedFocus === "dontcall" || storedFocus === "operations") {
       setFocusedModule(storedFocus);
     }
   }, []);
@@ -182,6 +186,19 @@ function HomeInner() {
     }
     setBubble(null);
   }, []);
+
+  // 1/2/3 keyboard shortcuts to jump between offices
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+      const idx = parseInt(e.key) - 1;
+      if (idx >= 0 && idx < order.length) focusModule(order[idx]);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [focusModule]);
 
   const selectDesk = useCallback(
     (deskId: string | null, officeSlug?: OfficeSlug) => {
@@ -236,31 +253,25 @@ function HomeInner() {
   // Poll roster for sidebar slug — drives Pixi indicators too
   const refetchRoster = useCallback(async () => {
     try {
-      const res = await fetch(
-        `/api/roster?office=${encodeURIComponent(sidebarSlug)}`,
-        { cache: "no-store" },
+      const results = await Promise.all(
+        order.map((slug) =>
+          fetch(`/api/roster?office=${encodeURIComponent(slug)}`, { cache: "no-store" })
+            .then((r) => r.ok ? r.json() as Promise<{ entries: RosterEntry[] }> : null)
+            .catch(() => null),
+        ),
       );
-      if (!res.ok) return;
-      const json = (await res.json()) as { entries: RosterEntry[] };
-      setRosterEntries(json.entries);
+      const merged = results.flatMap((r) => r?.entries ?? []);
+      setRosterEntries(merged);
     } catch {
       // ignore
     }
-  }, [sidebarSlug]);
+  }, []);
 
   useEffect(() => {
-    setRosterEntries(null);
-    let cancelled = false;
-    void (async () => {
-      await refetchRoster();
-      if (cancelled) return;
-    })();
+    void refetchRoster();
     const id = setInterval(refetchRoster, ROSTER_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [sidebarSlug, refetchRoster]);
+    return () => clearInterval(id);
+  }, [refetchRoster]);
 
   const busyDeskIds = useMemo(() => {
     const s = new Set<string>();
@@ -282,6 +293,21 @@ function HomeInner() {
         m.set(e.agent.deskId, "awaiting_input");
       } else if (c.runStatus === "done" && !c.acknowledgedAt) {
         m.set(e.agent.deskId, "done_unacked");
+      }
+    }
+    return m;
+  }, [rosterEntries]);
+
+  const deskRunStatus = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const e of rosterEntries ?? []) {
+      const status = e.current?.runStatus;
+      if (!status) continue;
+      if (status === "done") {
+        // Only colour the tab while unacknowledged
+        if (!e.current?.acknowledgedAt) m.set(e.agent.deskId, "done_unacked");
+      } else {
+        m.set(e.agent.deskId, status);
       }
     }
     return m;
@@ -356,6 +382,16 @@ function HomeInner() {
         return;
       }
 
+      // Done unacked → ack immediately then open tab
+      if (kind === "done_unacked") {
+        const runId = runByDesk.get(deskId);
+        if (runId) {
+          void fetch(`/api/runs/${encodeURIComponent(runId)}/ack`, { method: "POST" })
+            .then(() => refetchRoster())
+            .catch(() => {});
+        }
+      }
+
       // All other clicks → open/focus dock tab
       if (!agent) return;
       const agentConfig = offices[slug]?.agents.find((a) => a.deskId === deskId);
@@ -368,7 +404,7 @@ function HomeInner() {
         label: agentConfig?.name ?? deskId,
       });
     },
-    [agentStatus, agentByDesk, runByDesk, sidebarSlug, openOrFocus],
+    [agentStatus, agentByDesk, runByDesk, sidebarSlug, openOrFocus, refetchRoster],
   );
 
   const handleDeskDrop = useCallback(
@@ -499,20 +535,61 @@ function HomeInner() {
     );
   }, []);
 
+  // Lookup maps for ActiveWarRooms
+  const agentNameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const slug of order) {
+      for (const a of offices[slug].agents) m.set(a.id, a.name);
+    }
+    return m;
+  }, []);
+  const officeNameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const slug of order) m.set(slug, offices[slug].name);
+    return m;
+  }, []);
+  const officeAccentMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const slug of order) m.set(slug, offices[slug].theme.accent);
+    return m;
+  }, []);
+
   return (
     <div className="flex h-screen w-screen flex-col bg-black text-white">
       <header className="flex items-center justify-between border-b border-white/10 px-4 py-2 text-sm">
         <div className="font-mono tracking-tight">robots-in-a-house</div>
         <div className="flex items-center gap-3">
-          <div className="font-mono text-xs opacity-60">
-            station: {station.name}
-            {focusedModule ? ` · ${offices[focusedModule].name}` : " · overview"}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                const idx = focusedModule ? order.indexOf(focusedModule) : 0;
+                focusModule(order[(idx - 1 + order.length) % order.length]);
+              }}
+              className="rounded px-1.5 py-0.5 font-mono text-xs opacity-50 transition hover:bg-white/10 hover:opacity-100"
+              title="Previous office"
+            >
+              ‹
+            </button>
+            <div className="font-mono text-xs opacity-60">
+              station: {station.name}
+              {focusedModule ? ` · ${offices[focusedModule].name}` : " · overview"}
+            </div>
+            <button
+              onClick={() => {
+                const idx = focusedModule ? order.indexOf(focusedModule) : -1;
+                focusModule(order[(idx + 1) % order.length]);
+              }}
+              className="rounded px-1.5 py-0.5 font-mono text-xs opacity-50 transition hover:bg-white/10 hover:opacity-100"
+              title="Next office"
+            >
+              ›
+            </button>
           </div>
         </div>
       </header>
       <div className="flex flex-1 flex-col overflow-hidden">
           <main
-            className="relative flex-1 overflow-hidden"
+            className="relative min-h-0 flex-1 overflow-hidden"
             ref={officeContainerRef}
           >
             <Station
@@ -528,7 +605,7 @@ function HomeInner() {
               onAgentMove={handleAgentMove}
               onModuleFocus={(slug) => focusModule(slug as OfficeSlug)}
               onWarRoomClick={(slug) => {
-                if (slug === "paradise" || slug === "dontcall") {
+                if (slug === "paradise" || slug === "dontcall" || slug === "operations") {
                   const office = offices[slug];
                   openWarRoom(slug, office ? `${office.name} War Room` : "War Room");
                 }
@@ -543,12 +620,45 @@ function HomeInner() {
               contextUsage={contextUsage}
               showGrid={showGrid}
             />
-            <StationMinimap
-              station={station}
-              offices={offices}
-              focusedModule={focusedModule}
-              onFocusModule={(slug) => focusModule(slug as OfficeSlug)}
-            />
+            {/* Active war rooms — top-right overlay */}
+            <div className="pointer-events-auto absolute right-3 top-3 z-20 w-64">
+              <ActiveWarRooms
+                agentNames={agentNameMap}
+                officeNames={officeNameMap}
+                officeAccents={officeAccentMap}
+                onOpen={(slug, meetingId) => {
+                  const office = offices[slug];
+                  openWarRoom(slug, office ? `${office.name} War Room` : "War Room", meetingId);
+                }}
+              />
+            </div>
+            {/* Notifications — top-left overlay */}
+            <div className="pointer-events-auto absolute left-3 top-3 z-20 w-64">
+              <NotificationCenter
+                officeNames={officeNameMap}
+                officeAccents={officeAccentMap}
+                onOpenWarRoom={(slug, meetingId) => {
+                  const office = offices[slug];
+                  openWarRoom(
+                    slug,
+                    office ? `${office.name} War Room` : "War Room",
+                    meetingId,
+                  );
+                }}
+                onOpenAgent={(slug, agentId) => {
+                  const agentConfig = offices[slug]?.agents.find((a) => a.id === agentId);
+                  if (!agentConfig) return;
+                  openOrFocus({
+                    id: agentId,
+                    agentId,
+                    deskId: agentConfig.deskId,
+                    officeSlug: slug,
+                    kind: "1:1",
+                    label: agentConfig.name,
+                  });
+                }}
+              />
+            </div>
             {bubble && (
               <SpriteBubble
                 key={`${bubble.deskId}:${bubble.mode}`}
@@ -576,6 +686,40 @@ function HomeInner() {
                 />
               );
             })}
+
+            {/* Office pill switcher — bottom-center of canvas */}
+            <div className="pointer-events-auto absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/10 bg-black/60 px-2 py-1.5 backdrop-blur-sm">
+              {order.map((slug, i) => {
+                const office = offices[slug];
+                const accent = office.theme.accent;
+                const active = focusedModule === slug;
+                const hasBusy = [...busyDeskIds].some((deskId) =>
+                  office.desks.some((d) => d.id === deskId),
+                );
+                return (
+                  <button
+                    key={slug}
+                    onClick={() => focusModule(slug)}
+                    title={`${office.name} (${i + 1})`}
+                    className="flex items-center gap-1.5 rounded-full px-3 py-1 font-mono text-[10px] uppercase tracking-wider transition-all"
+                    style={
+                      active
+                        ? { backgroundColor: accent + "22", color: accent, borderColor: accent + "55", border: "1px solid" }
+                        : { color: "rgba(255,255,255,0.35)" }
+                    }
+                  >
+                    {hasBusy && !active && (
+                      <span
+                        className="inline-block h-1 w-1 animate-pulse rounded-full"
+                        style={{ backgroundColor: accent }}
+                      />
+                    )}
+                    <span>{office.name}</span>
+                    <span className="opacity-30">{i + 1}</span>
+                  </button>
+                );
+              })}
+            </div>
           </main>
           {hoverCard && (() => {
             const agent = agentByDesk.get(hoverCard.deskId);
@@ -602,6 +746,7 @@ function HomeInner() {
                   task: rosterEntry.current?.task ? { title: rosterEntry.current.task.title } : null,
                   tokens: null,
                 } : null}
+                queueDepth={rosterEntry?.queueDepth ?? 0}
                 anchorX={hoverCard.x}
                 anchorY={hoverCard.y}
                 onDismiss={() => setHoverCard(null)}
@@ -613,6 +758,15 @@ function HomeInner() {
             agents={allAgentsForDock}
             rosterEntries={rosterEntries ?? []}
             offices={offices}
+            deskRunStatus={deskRunStatus}
+            onAckDesk={(deskId) => {
+              const runId = runByDesk.get(deskId);
+              if (runId) {
+                void fetch(`/api/runs/${encodeURIComponent(runId)}/ack`, { method: "POST" })
+                  .then(() => refetchRoster())
+                  .catch(() => {});
+              }
+            }}
           />
           <PromptBar
             agents={sidebarOffice.agents}
@@ -625,14 +779,8 @@ function HomeInner() {
       </div>
       <CommandPalette
         slug={sidebarSlug}
-        otherSlug={sidebarSlug === "paradise" ? "dontcall" : "paradise"}
-        otherName={
-          offices[sidebarSlug === "paradise" ? "dontcall" : "paradise"].name
-        }
-        agents={sidebarOffice.agents}
-        onSwitchOffice={() =>
-          focusModule(sidebarSlug === "paradise" ? "dontcall" : "paradise")
-        }
+        allOffices={order.map((s) => ({ slug: s, name: offices[s].name, agents: offices[s].agents }))}
+        onSwitchOffice={(slug) => focusModule(slug as OfficeSlug)}
         onFocusAgent={(deskId) => selectDesk(deskId)}
       />
     </div>

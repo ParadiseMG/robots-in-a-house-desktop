@@ -34,6 +34,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "task office mismatch" }, { status: 400 });
   }
 
+  const existing = d
+    .prepare("SELECT id FROM assignments WHERE task_id = ? AND completed_at IS NULL LIMIT 1")
+    .get(taskId) as { id: string } | undefined;
+  if (existing) {
+    return NextResponse.json({ error: "task already assigned" }, { status: 409 });
+  }
+
   const assignmentId = crypto.randomUUID();
   const now = Date.now();
 

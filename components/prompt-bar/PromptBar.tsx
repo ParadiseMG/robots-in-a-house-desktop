@@ -31,6 +31,7 @@ export default function PromptBar({ agents, officeSlug, onSent }: Props) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const [mention, setMention] = useState<MentionState>({
     open: false,
     query: "",
@@ -45,7 +46,10 @@ export default function PromptBar({ agents, officeSlug, onSent }: Props) {
     return agents.filter(
       (a) => a.name.toLowerCase().startsWith(q) || a.id.toLowerCase().startsWith(q),
     );
-  }, [mention, agents]);
+  // Depend on the scalar fields only — not the whole object — so a highlight
+  // or anchor change doesn't produce a new array reference and retrigger effects.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mention.open, mention.query, agents]);
 
   // Detect mention state on text/cursor change
   const refreshMention = useCallback(
@@ -72,12 +76,15 @@ export default function PromptBar({ agents, officeSlug, onSent }: Props) {
   );
 
   useEffect(() => {
-    if (mention.open && matches.length === 0) {
-      setMention((m) => ({ ...m, highlight: 0 }));
-    } else if (mention.open && mention.highlight >= matches.length) {
-      setMention((m) => ({ ...m, highlight: Math.max(0, matches.length - 1) }));
+    // Clamp highlight when the match list shrinks (e.g. user keeps typing).
+    // Skip when matches is empty — highlight will reset to 0 when mention opens.
+    if (mention.open && matches.length > 0 && mention.highlight >= matches.length) {
+      setMention((m) => ({ ...m, highlight: matches.length - 1 }));
     }
-  }, [matches, mention.open, mention.highlight]);
+  // Use matches.length (not the array ref) so a new-but-same-length array
+  // doesn't re-fire this effect and cause an infinite setState loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matches.length, mention.open, mention.highlight]);
 
   const pickAgent = (agent: AgentConfig) => {
     if (!areaRef.current) return;
@@ -170,11 +177,16 @@ export default function PromptBar({ agents, officeSlug, onSent }: Props) {
         throw new Error(j.error ?? `HTTP ${res.status}`);
       }
       const j = (await res.json()) as {
+        queued?: boolean;
         deskId: string;
         runId: string | null;
         isReal: boolean;
       };
       setText("");
+      if (j.queued) {
+        setToast(`queued for ${parsed.agent.name}`);
+        setTimeout(() => setToast(null), 2500);
+      }
       onSent(j);
     } catch (err) {
       setError(err instanceof Error ? err.message : "send failed");
@@ -259,6 +271,9 @@ export default function PromptBar({ agents, officeSlug, onSent }: Props) {
       </div>
       {error && (
         <div className="mt-1 font-mono text-[10px] text-red-400">{error}</div>
+      )}
+      {toast && (
+        <div className="mt-1 font-mono text-[10px] text-amber-300/80">{toast}</div>
       )}
     </div>
   );

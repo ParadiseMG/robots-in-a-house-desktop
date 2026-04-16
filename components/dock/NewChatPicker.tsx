@@ -39,6 +39,20 @@ export default function NewChatPicker({ agents, onClose, onConveneWarRoom, offic
     onClose();
   };
 
+  const callAll = () => {
+    for (const agent of agents) {
+      openOrFocus({
+        id: agent.id,
+        agentId: agent.id,
+        deskId: agent.deskId,
+        officeSlug: agent.officeSlug,
+        kind: "1:1",
+        label: agent.name,
+      });
+    }
+    onClose();
+  };
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
@@ -51,6 +65,16 @@ export default function NewChatPicker({ agents, onClose, onConveneWarRoom, offic
           className="font-mono text-[10px] text-white/40 hover:text-white"
         >
           ✕
+        </button>
+      </div>
+
+      <div className="border-b border-white/10 px-2 py-1.5">
+        <button
+          type="button"
+          onClick={callAll}
+          className="w-full rounded border border-white/20 bg-white/5 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-white/60 transition hover:border-white/40 hover:bg-white/10 hover:text-white"
+        >
+          call all
         </button>
       </div>
 
