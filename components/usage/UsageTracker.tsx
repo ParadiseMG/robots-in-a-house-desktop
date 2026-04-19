@@ -97,30 +97,21 @@ export default function UsageTracker() {
 
   if (!usage) return null;
 
-  const hasRealData = !!usage.fiveHour;
+  // Only show when utilization is high enough to be a warning
+  if (!usage.fiveHour || usage.fiveHour.utilization < 0.75) return null;
 
   return (
     <div className="border-t border-white/10 bg-zinc-950/60 px-4 py-1.5 font-mono text-[10px] text-white/60 space-y-1.5">
-      {hasRealData ? (
-        <>
-          <UsageBar
-            label="5h window"
-            pct={usage.fiveHour!.utilization}
-            detail={`${Math.round(usage.fiveHour!.utilization * 100)}% · ${fmtTimeLeft(usage.fiveHour!.resetsAt) ?? "—"} left · ${usage.runs} run${usage.runs === 1 ? "" : "s"}`}
-          />
-          {usage.sevenDay && (
-            <UsageBar
-              label="7d window"
-              pct={usage.sevenDay.utilization}
-              detail={`${Math.round(usage.sevenDay.utilization * 100)}% · ${fmtTimeLeft(usage.sevenDay.resetsAt) ?? "—"} left`}
-            />
-          )}
-        </>
-      ) : (
+      <UsageBar
+        label="5h window"
+        pct={usage.fiveHour.utilization}
+        detail={`${Math.round(usage.fiveHour.utilization * 100)}% · ${fmtTimeLeft(usage.fiveHour.resetsAt) ?? "—"} left · ${usage.runs} run${usage.runs === 1 ? "" : "s"}`}
+      />
+      {usage.sevenDay && (
         <UsageBar
-          label="5h tokens (i/o)"
-          pct={Math.min(1, usage.tokens / 500_000)}
-          detail={`${fmtTokens(usage.tokens)} · ${usage.runs} run${usage.runs === 1 ? "" : "s"} · waiting for live data`}
+          label="7d window"
+          pct={usage.sevenDay.utilization}
+          detail={`${Math.round(usage.sevenDay.utilization * 100)}% · ${fmtTimeLeft(usage.sevenDay.resetsAt) ?? "—"} left`}
         />
       )}
     </div>

@@ -95,7 +95,7 @@ export type AgentConfig = {
  * - awaiting_input: agent called request_input and is blocked on a human reply
  * - done_unacked:   latest run finished and the user hasn't opened the inspector yet
  */
-export type IndicatorKind = "awaiting_input" | "done_unacked" | "error";
+export type IndicatorKind = "awaiting_input" | "done_unacked" | "error" | "delegating";
 
 export type OfficeConfig = {
   slug: string;

@@ -20,8 +20,14 @@
     },
     "deskStyle": {
       "tilesheet": "basement_16x16.png",
-      "chair": [8, 33],
-      "monitor": [10, 30],
+      "chair": [
+        8,
+        33
+      ],
+      "monitor": [
+        10,
+        30
+      ],
       "chairType": "towel",
       "towelColor": "#f59e0b"
     },
@@ -294,7 +300,7 @@
       "role": "Marketing Blasts",
       "spritePack": "limezu/office/auto",
       "visual": {
-        "premade": "premade_03.png"
+        "premade": "premade_Blastoise.png"
       },
       "isReal": true,
       "cwd": "agent-workspaces/paradise/blastoise",

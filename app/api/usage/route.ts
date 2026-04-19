@@ -31,10 +31,12 @@ export async function GET() {
 
   const tokens = row.input_tokens + row.output_tokens;
 
-  // Pull real rate limit data from Anthropic (captured from SDK events)
+  // Pull real rate limit data from Anthropic (captured from SDK events).
+  // Only surface entries updated within the current window — stale rows
+  // from previous sessions would keep the bar visible at 0%.
   const rateLimits = getAllRateLimits();
-  const fiveHour = rateLimits.find((r) => r.key === "five_hour");
-  const sevenDay = rateLimits.find((r) => r.key === "seven_day");
+  const fiveHour = rateLimits.find((r) => r.key === "five_hour" && r.updated_at > since);
+  const sevenDay = rateLimits.find((r) => r.key === "seven_day" && r.updated_at > since);
 
   return NextResponse.json({
     windowMs: WINDOW_MS,

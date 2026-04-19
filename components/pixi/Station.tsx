@@ -461,6 +461,7 @@ export default function Station({
 
         // Per-module outer glow — soft radial behind the room
         const glow = new Graphics();
+        glow.eventMode = "none";
         const glowPad = Math.max(worldW, worldH) * 0.3;
         const glowColor = hexToInt(moduleCfg.accent);
         // Stack of fading rings for a cheap soft outer glow
@@ -508,6 +509,7 @@ export default function Station({
 
         // Neon trim frame around the module
         const trim = new Graphics();
+        trim.eventMode = "none"; // must not block agent clicks
         trim
           .roundRect(-2, -2, worldW + 4, worldH + 4, 3)
           .stroke({ color: glowColor, width: 2, alpha: 0.8 });
@@ -1022,6 +1024,7 @@ export default function Station({
 
       // ── Beam overlay — drawn above all module furniture, in world space ──
       const beamOverlay = new Graphics();
+      beamOverlay.eventMode = "none"; // must not block agent clicks
       world.addChild(beamOverlay);
 
       // ── Camera: compute target transform ────────────────────────────────
@@ -1447,7 +1450,7 @@ export default function Station({
               const isDelegating = (delegationsRef.current.get(deskId) ?? 0) > 0;
               sprites.exclamation.visible = kind === "awaiting_input";
               sprites.check.visible = kind === "done_unacked";
-              sprites.pip.visible = busy && !kind;
+              sprites.pip.visible = (busy && !kind) || kind === "delegating";
               // Tint pip purple when delegating, default highlight otherwise
               if (sprites.pip.visible) {
                 sprites.pip.clear();

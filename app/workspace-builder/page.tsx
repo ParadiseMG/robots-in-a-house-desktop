@@ -46,7 +46,7 @@ function SpriteMini({ file, size = 32 }: { file: string; size?: number }) {
     }).catch(() => {});
     return () => { dead = true; };
   }, [file, size]);
-  return <canvas ref={ref} width={size} height={size * 2} style={{ imageRendering: "pixelated", width: size, height: size * 2 }} />;
+  return <canvas ref={ref} width={size} height={size * 2} style={{ imageRendering: "pixelated", width: size, height: size * 2, pointerEvents: "none" }} />;
 }
 
 // ── Room canvas with draggable agents ────────────────────────────────────────
@@ -506,6 +506,27 @@ export default function WorkspaceBuilderPage() {
     setDirty(true);
   }, [allConfigs, dirty]);
 
+  // Auto-save: debounced write after every config change
+  const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSave = useCallback((slug: string, cfg: OfficeConfig) => {
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/workspace-builder/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slug, config: cfg }),
+        });
+        if (res.ok) {
+          setDirty(false);
+          setSaveStatus("saved");
+          setAllConfigs((prev) => prev ? { ...prev, [slug]: structuredClone(cfg) } : prev);
+          setTimeout(() => setSaveStatus("idle"), 1500);
+        }
+      } catch { /* silent — manual save still available */ }
+    }, 800);
+  }, []);
+
   // Mutate config helpers
   const updateConfig = useCallback((fn: (c: OfficeConfig) => void) => {
     setConfig((prev) => {
@@ -513,9 +534,10 @@ export default function WorkspaceBuilderPage() {
       const next = structuredClone(prev);
       fn(next);
       setDirty(true);
+      if (activeSlug) autoSave(activeSlug, next);
       return next;
     });
-  }, []);
+  }, [activeSlug, autoSave]);
 
   const updateAgent = useCallback((agentId: string, patch: Partial<AgentConfig>) => {
     updateConfig((c) => {
