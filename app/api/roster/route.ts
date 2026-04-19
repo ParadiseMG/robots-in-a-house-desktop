@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { db, queueDepth, activeDelegationsByDelegator, activeDelegationLinks } from "@/server/db";
 import type { OfficeConfig } from "@/lib/office-types";
+import { withErrorReporting } from "@/lib/api-error-handler";
 
 const VALID_SLUGS = new Set(["paradise", "dontcall", "operations", "launchos"]);
 
@@ -21,7 +22,7 @@ async function loadOffice(slug: string): Promise<OfficeConfig | null> {
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request) {
+export const GET = withErrorReporting("GET /api/roster", async (req: Request) => {
   const url = new URL(req.url);
   const officeSlug = url.searchParams.get("office");
   if (!officeSlug) {
@@ -135,4 +136,4 @@ export async function GET(req: Request) {
   });
 
   return NextResponse.json({ officeSlug, entries });
-}
+});

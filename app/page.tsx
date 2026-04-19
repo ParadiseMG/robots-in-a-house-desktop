@@ -23,6 +23,7 @@ import { useDockTabs } from "@/hooks/useDockTabs";
 import AgentHoverCard from "@/components/canvas/AgentHoverCard";
 import ActiveWarRooms from "@/components/events/ActiveWarRooms";
 import NotificationCenter from "@/components/notifications/NotificationCenter";
+import ErrorLog from "@/components/errors/ErrorLog";
 import { useAmbientStream } from "@/hooks/useAmbientStream";
 import confetti from "canvas-confetti";
 
@@ -863,7 +864,7 @@ function HomeInner() {
               </a>
             </div>
             {/* Notifications — top-left, below toolbar (canvas view only) */}
-            {viewMode === "canvas" && <div className="pointer-events-auto absolute left-3 top-14 z-20 w-64">
+            {viewMode === "canvas" && <div className="pointer-events-auto absolute left-3 top-14 z-20 w-64 flex flex-col gap-2">
               <NotificationCenter
                 officeNames={officeNameMap}
                 officeAccents={officeAccentMap}
@@ -875,6 +876,21 @@ function HomeInner() {
                     meetingId,
                   );
                 }}
+                onOpenAgent={(slug, agentId) => {
+                  const agentConfig = offices[slug]?.agents.find((a) => a.id === agentId);
+                  if (!agentConfig) return;
+                  openOrFocus({
+                    id: agentId,
+                    agentId,
+                    deskId: agentConfig.deskId,
+                    officeSlug: slug,
+                    kind: "1:1",
+                    label: agentConfig.name,
+                  });
+                }}
+              />
+              <ErrorLog
+                officeNames={officeNameMap}
                 onOpenAgent={(slug, agentId) => {
                   const agentConfig = offices[slug]?.agents.find((a) => a.id === agentId);
                   if (!agentConfig) return;

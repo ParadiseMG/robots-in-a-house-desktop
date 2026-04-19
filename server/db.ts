@@ -122,6 +122,22 @@ function migrate(d: Database.Database) {
       rate_limit_type TEXT,
       updated_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS error_log (
+      id TEXT PRIMARY KEY,
+      ts INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'error',
+      message TEXT NOT NULL,
+      stack TEXT,
+      agent_id TEXT,
+      office_slug TEXT,
+      run_id TEXT,
+      context TEXT,
+      acknowledged_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_error_log_ts ON error_log(ts);
+    CREATE INDEX IF NOT EXISTS idx_error_log_source ON error_log(source, ts);
   `);
 
   // Idempotent column additions for agent_runs (pre-existing DBs)
@@ -622,5 +638,116 @@ export function queueDepth(officeSlug: string, agentId: string): number {
       "SELECT COUNT(*) as n FROM prompt_queue WHERE agent_id = ? AND office_slug = ?",
     )
     .get(agentId, officeSlug) as { n: number };
+  return row.n;
+}
+
+// ---- Error log ----
+
+export type ErrorLogRow = {
+  id: string;
+  ts: number;
+  source: "runner" | "api" | "agent" | "frontend";
+  severity: "error" | "warn" | "fatal";
+  message: string;
+  stack: string | null;
+  agent_id: string | null;
+  office_slug: string | null;
+  run_id: string | null;
+  context: string | null;
+  acknowledged_at: number | null;
+};
+
+export function insertError(entry: {
+  source: ErrorLogRow["source"];
+  severity?: ErrorLogRow["severity"];
+  message: string;
+  stack?: string | null;
+  agentId?: string | null;
+  officeSlug?: string | null;
+  runId?: string | null;
+  context?: Record<string, unknown> | null;
+}): string {
+  const id = crypto.randomUUID();
+  db()
+    .prepare(
+      `INSERT INTO error_log (id, ts, source, severity, message, stack, agent_id, office_slug, run_id, context)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      Date.now(),
+      entry.source,
+      entry.severity ?? "error",
+      entry.message,
+      entry.stack ?? null,
+      entry.agentId ?? null,
+      entry.officeSlug ?? null,
+      entry.runId ?? null,
+      entry.context ? JSON.stringify(entry.context) : null,
+    );
+  return id;
+}
+
+export function queryErrors(opts?: {
+  source?: string;
+  severity?: string;
+  officeSlug?: string;
+  agentId?: string;
+  since?: number;
+  limit?: number;
+  includeAcked?: boolean;
+}): ErrorLogRow[] {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (opts?.source) {
+    conditions.push("source = ?");
+    params.push(opts.source);
+  }
+  if (opts?.severity) {
+    conditions.push("severity = ?");
+    params.push(opts.severity);
+  }
+  if (opts?.officeSlug) {
+    conditions.push("office_slug = ?");
+    params.push(opts.officeSlug);
+  }
+  if (opts?.agentId) {
+    conditions.push("agent_id = ?");
+    params.push(opts.agentId);
+  }
+  if (opts?.since) {
+    conditions.push("ts > ?");
+    params.push(opts.since);
+  }
+  if (!opts?.includeAcked) {
+    conditions.push("acknowledged_at IS NULL");
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limit = opts?.limit ?? 50;
+
+  return db()
+    .prepare(`SELECT * FROM error_log ${where} ORDER BY ts DESC LIMIT ?`)
+    .all(...params, limit) as ErrorLogRow[];
+}
+
+export function ackError(id: string): void {
+  db()
+    .prepare("UPDATE error_log SET acknowledged_at = ? WHERE id = ?")
+    .run(Date.now(), id);
+}
+
+export function ackAllErrors(): void {
+  db()
+    .prepare("UPDATE error_log SET acknowledged_at = ? WHERE acknowledged_at IS NULL")
+    .run(Date.now());
+}
+
+export function errorCount(since?: number): number {
+  const cutoff = since ?? Date.now() - 24 * 60 * 60 * 1000;
+  const row = db()
+    .prepare("SELECT COUNT(*) as n FROM error_log WHERE ts > ? AND acknowledged_at IS NULL")
+    .get(cutoff) as { n: number };
   return row.n;
 }

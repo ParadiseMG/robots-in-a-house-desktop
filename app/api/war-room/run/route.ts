@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { db, getAgent, agentIsBusy, enqueuePrompt } from "@/server/db";
+import { withErrorReporting } from "@/lib/api-error-handler";
 
 const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:3100";
 
-export async function POST(req: Request) {
+export const POST = withErrorReporting("POST /api/war-room/run", async (req: Request) => {
   const body = (await req.json()) as {
     officeSlug?: string;
     agentIds?: string[];
@@ -103,4 +104,4 @@ export async function POST(req: Request) {
     convenedAt: now,
     attendees: runResults,
   });
-}
+});

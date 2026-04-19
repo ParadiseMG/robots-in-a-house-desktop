@@ -235,13 +235,25 @@ export default function ChatTab({
           .join("\n");
         prompt = fileBlock + (trimmed ? "\n\n" + trimmed : "");
       }
-      await fetch("/api/quick-run", {
+      const res = await fetch("/api/quick-run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ officeSlug, agentId, prompt }),
       });
       setChatText("");
       setAttachments([]);
+      // If the message was queued (agent busy), add it to pending messages
+      // immediately so the user sees it in the chat without waiting for the
+      // next 3s poll cycle.
+      if (res.ok) {
+        const json = await res.json() as { queued?: boolean; queueId?: string };
+        if (json.queued && json.queueId) {
+          setPendingMessages((prev) => [
+            ...prev,
+            { id: json.queueId!, text: prompt, queuedAt: Date.now() },
+          ]);
+        }
+      }
       setRefetchNonce((n) => n + 1);
     } finally {
       setChatPending(false);

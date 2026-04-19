@@ -4,8 +4,9 @@ import {
   createAgent,
   isValidOfficeSlug,
 } from "@/lib/agent-builder";
+import { withErrorReporting } from "@/lib/api-error-handler";
 
-export async function POST(req: Request) {
+export const POST = withErrorReporting("POST /api/agents/create", async (req: Request) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -45,4 +46,4 @@ export async function POST(req: Request) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
   }
-}
+});

@@ -26,6 +26,7 @@ import {
   upsertRateLimit,
   type AgentRunRow,
 } from "./db.js";
+import { reportError } from "./error-reporter.js";
 import {
   AgentBuilderError,
   createAgent as createAgentImpl,
@@ -794,7 +795,14 @@ async function runAgent(params: {
       ended_at: Date.now(),
       error: message,
     });
-    console.error(`[runner] run ${runId} failed:`, err);
+    reportError({
+      source: "agent",
+      message: `Run failed: ${message}`,
+      error: err,
+      agentId,
+      officeSlug,
+      runId,
+    });
   } finally {
     // If the run ended while still blocked on a waiter, unblock with an empty string
     // so the MCP tool promise resolves (SDK shutdown path).
@@ -924,7 +932,12 @@ const server = createServer(async (req, res) => {
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "not found" }));
   } catch (err) {
-    console.error("[runner] handler error:", err);
+    reportError({
+      source: "runner",
+      message: `HTTP handler error: ${err instanceof Error ? err.message : String(err)}`,
+      error: err,
+      context: { method: req.method, url: req.url },
+    });
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
   }

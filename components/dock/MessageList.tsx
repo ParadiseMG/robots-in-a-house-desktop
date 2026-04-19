@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import ToolCallLine from "@/components/dock/ToolCallLine";
 
 export type ChatMessage = {
@@ -41,17 +41,60 @@ export default function MessageList({
   isLive,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Track whether the user has scrolled away from the bottom.
+  // Only USER-initiated scrolls set this — programmatic scrolls are ignored
+  // via the `programmaticScroll` guard.
+  const userScrolledRef = useRef(false);
+  const prevMessageCountRef = useRef(0);
+  const prevLiveTextLenRef = useRef(0);
+  const programmaticScrollRef = useRef(false);
 
-  // Auto-scroll to bottom when messages, pending messages, or live text change
-  useEffect(() => {
+  const onScroll = useCallback(() => {
+    // Ignore scroll events caused by our own scrollTop assignment
+    if (programmaticScrollRef.current) return;
     const el = scrollRef.current;
     if (!el) return;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    userScrolledRef.current = distFromBottom > 80;
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    programmaticScrollRef.current = true;
     el.scrollTop = el.scrollHeight;
-  }, [messages, pendingMessages, liveText]);
+    // Reset the guard after the browser fires the scroll event
+    requestAnimationFrame(() => {
+      programmaticScrollRef.current = false;
+    });
+  }, []);
+
+  // Scroll on new messages or pending messages being added
+  useEffect(() => {
+    const currentCount = (messages?.length ?? 0) + pendingMessages.length;
+    const newContent = currentCount > prevMessageCountRef.current;
+    prevMessageCountRef.current = currentCount;
+
+    if (!userScrolledRef.current || newContent) {
+      scrollToBottom();
+    }
+  }, [messages, pendingMessages, scrollToBottom]);
+
+  // Scroll on live text only if user is at the bottom
+  useEffect(() => {
+    const len = liveText.length;
+    const grew = len > prevLiveTextLenRef.current;
+    prevLiveTextLenRef.current = len;
+
+    if (grew && !userScrolledRef.current) {
+      scrollToBottom();
+    }
+  }, [liveText, scrollToBottom]);
 
   return (
     <div
       ref={scrollRef}
+      onScroll={onScroll}
       className="flex-1 overflow-y-auto space-y-2 p-2"
     >
       {messages === null ? (

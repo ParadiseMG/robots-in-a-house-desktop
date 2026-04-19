@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db, getAgent, getResumeSessionId, agentIsBusy } from "@/server/db";
+import { withErrorReporting } from "@/lib/api-error-handler";
 
 const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:3100";
 
@@ -11,7 +12,7 @@ const BREAK_PROMPT = `It's break time. Before we wrap this session:
 
 Next time we talk you'll start fresh without this conversation history, so the note is how you remember.`;
 
-export async function POST(req: Request) {
+export const POST = withErrorReporting("POST /api/break", async (req: Request) => {
   const body = (await req.json()) as {
     officeSlug?: string;
     agentId?: string;
@@ -82,4 +83,4 @@ export async function POST(req: Request) {
     runId,
     resumedFrom: resume,
   });
-}
+});

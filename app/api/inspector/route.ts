@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { db } from "@/server/db";
 import type { OfficeConfig } from "@/lib/office-types";
+import { withErrorReporting } from "@/lib/api-error-handler";
 
 const VALID_SLUGS = new Set(["paradise", "dontcall", "operations", "launchos"]);
 
@@ -21,7 +22,7 @@ async function loadOffice(slug: string): Promise<OfficeConfig | null> {
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request) {
+export const GET = withErrorReporting("GET /api/inspector", async (req: Request) => {
   const url = new URL(req.url);
   const officeSlug = url.searchParams.get("office");
   const deskId = url.searchParams.get("deskId");
@@ -170,4 +171,4 @@ export async function GET(req: Request) {
     })),
     context,
   });
-}
+});

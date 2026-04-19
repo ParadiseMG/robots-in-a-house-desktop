@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
 import type { OfficeConfig } from "@/lib/office-types";
+import { withErrorReporting } from "@/lib/api-error-handler";
 
 const VALID_SLUGS = ["paradise", "dontcall", "operations", "launchos"] as const;
 type ValidSlug = (typeof VALID_SLUGS)[number];
@@ -10,7 +11,7 @@ function isValidSlug(s: unknown): s is ValidSlug {
   return VALID_SLUGS.includes(s as ValidSlug);
 }
 
-export async function POST(req: Request) {
+export const POST = withErrorReporting("POST /api/desks/move", async (req: Request) => {
   const body = (await req.json()) as {
     officeSlug?: unknown;
     deskId?: unknown;
@@ -68,4 +69,4 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json({ ok: true, desk: { id: deskId, gridX, gridY } });
-}
+});
