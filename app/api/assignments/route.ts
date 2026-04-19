@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { db, getAgent, type AssignmentRow } from "@/server/db";
+import { withErrorReporting } from "@/lib/api-error-handler";
 
-export async function GET(req: Request) {
+export const GET = withErrorReporting("GET /api/assignments", async (req: Request) => {
   const url = new URL(req.url);
   const office = url.searchParams.get("office");
   if (!office) return NextResponse.json({ error: "missing office" }, { status: 400 });
@@ -13,9 +14,9 @@ export async function GET(req: Request) {
     .all(office) as AssignmentRow[];
 
   return NextResponse.json({ assignments: rows });
-}
+});
 
-export async function POST(req: Request) {
+export const POST = withErrorReporting("POST /api/assignments", async (req: Request) => {
   const body = (await req.json()) as { taskId?: string; agentId?: string; officeSlug?: string };
   const { taskId, agentId, officeSlug } = body;
   if (!taskId || !agentId || !officeSlug) {
@@ -63,4 +64,4 @@ export async function POST(req: Request) {
       completed_at: null,
     },
   });
-}
+});

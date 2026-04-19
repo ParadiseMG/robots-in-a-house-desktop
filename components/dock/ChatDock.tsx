@@ -11,6 +11,7 @@ import TabStrip from "@/components/dock/TabStrip";
 import ChatTab from "@/components/dock/ChatTab";
 import WarRoomTab from "@/components/dock/WarRoomTab";
 import NewChatPicker from "@/components/dock/NewChatPicker";
+import ReportBugModal from "@/components/errors/ReportBugModal";
 import type { OfficeConfig } from "@/lib/office-types";
 
 type RosterEntry = {
@@ -36,6 +37,7 @@ type Props = {
   offices?: Record<string, OfficeConfig>;
   deskRunStatus?: ReadonlyMap<string, string>;
   onAckDesk?: (deskId: string) => void;
+  activeOfficeSlug?: string | null;
 };
 
 const MIN_HEIGHT = 120;
@@ -52,10 +54,11 @@ export function DockTabsProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function ChatDock({ agents = [], rosterEntries = [], offices = {}, deskRunStatus, onAckDesk }: Props) {
+export default function ChatDock({ agents = [], rosterEntries = [], offices = {}, deskRunStatus, onAckDesk, activeOfficeSlug }: Props) {
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [collapsed, setCollapsed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [reportBugOpen, setReportBugOpen] = useState(false);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
 
   const onResizeMouseDown = useCallback((e: React.MouseEvent) => {
@@ -100,6 +103,7 @@ export default function ChatDock({ agents = [], rosterEntries = [], offices = {}
         onOpenPicker={() => setPickerOpen((v) => !v)}
         deskRunStatus={deskRunStatus}
         onAckDesk={onAckDesk}
+        onReportBug={() => setReportBugOpen(true)}
       />
 
       {!collapsed && (
@@ -113,7 +117,33 @@ export default function ChatDock({ agents = [], rosterEntries = [], offices = {}
           />
         </div>
       )}
+
+      <DockBugModal
+        open={reportBugOpen}
+        onClose={() => setReportBugOpen(false)}
+        activeOfficeSlug={activeOfficeSlug}
+      />
     </div>
+  );
+}
+
+function DockBugModal({
+  open,
+  onClose,
+  activeOfficeSlug,
+}: {
+  open: boolean;
+  onClose: () => void;
+  activeOfficeSlug?: string | null;
+}) {
+  const { focusedTab } = useDockTabs();
+  return (
+    <ReportBugModal
+      open={open}
+      onClose={onClose}
+      officeSlug={activeOfficeSlug}
+      agentId={focusedTab?.agentId ?? null}
+    />
   );
 }
 

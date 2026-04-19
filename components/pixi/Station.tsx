@@ -659,6 +659,10 @@ export default function Station({
           body.zIndex = zBase + 3;
           body.eventMode = "static";
           body.cursor = "pointer";
+          // Explicit hit area in local (unscaled) coords — sprites are 16x32
+          // with anchor (0.5, 1.0). Pad generously so clicks always register
+          // regardless of transparent pixels or animation frame.
+          body.hitArea = new Rectangle(-10, -34, 20, 36);
           const deskId = desk.id;
           const officeSlug = office.slug;
           body.on("pointertap", (ev) => {
@@ -1440,14 +1444,22 @@ export default function Station({
               if (!sprites) continue;
               const kind = statusRef.current.get(deskId);
               const busy = busyRef.current.has(deskId);
+              const isDelegating = (delegationsRef.current.get(deskId) ?? 0) > 0;
               sprites.exclamation.visible = kind === "awaiting_input";
               sprites.check.visible = kind === "done_unacked";
               sprites.pip.visible = busy && !kind;
+              // Tint pip purple when delegating, default highlight otherwise
+              if (sprites.pip.visible) {
+                sprites.pip.clear();
+                sprites.pip.circle(0, 0, 4).fill(isDelegating ? 0xA78BFA : m.office.theme.highlight).stroke({ color: 0x000000, width: 1 });
+              }
               // Desk glow
               const glowR = Math.max(m.tw, m.th) * 0.72;
               sprites.deskGlow.clear();
               if (kind === "awaiting_input") {
                 sprites.deskGlow.circle(0, 0, glowR).fill({ color: 0xFACC15, alpha: 0.22 });
+              } else if (busy && isDelegating) {
+                sprites.deskGlow.circle(0, 0, glowR).fill({ color: 0xA78BFA, alpha: 0.18 });
               } else if (busy) {
                 sprites.deskGlow.circle(0, 0, glowR).fill({ color: 0xF59E0B, alpha: 0.18 });
               } else if (kind === "done_unacked") {

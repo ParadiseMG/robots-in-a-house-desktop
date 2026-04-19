@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/server/db";
+import { withErrorReporting } from "@/lib/api-error-handler";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ const SETTLED = new Set(["done", "error"]);
  * ?status=active  → only meetings with at least one non-settled run (default)
  * ?status=recent  → meetings from the last 24h
  */
-export async function GET(req: Request) {
+export const GET = withErrorReporting("GET /api/war-room", async (req: Request) => {
   const url = new URL(req.url);
   const filter = url.searchParams.get("status") ?? "active";
   const d = db();
@@ -73,11 +74,11 @@ export async function GET(req: Request) {
       convenedBy: m.convened_by,
       prompt: m.prompt.length > 80 ? m.prompt.slice(0, 80) + "…" : m.prompt,
       convenedAt: m.convened_at,
-      status: allDone ? "done" as const : "running" as const,
+      status: (allDone ? "done" : "running") as "done" | "running",
       attendeeCount: attendees.length,
       agentStatuses,
     };
   });
 
   return NextResponse.json({ meetings: result });
-}
+});

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import MessageList, { type ChatMessage } from "@/components/dock/MessageList";
+import MessageList, { type ChatMessage, type PendingMessage } from "@/components/dock/MessageList";
 import ToolCallLine from "@/components/dock/ToolCallLine";
 import AwaitingInputForm from "@/components/dock/AwaitingInputForm";
+import Tooltip from "@/components/ui/Tooltip";
 
 type StreamEvent =
   | { kind: "assistant"; payload: { text: string } }
@@ -46,6 +47,7 @@ export default function ChatTab({
   onStatusChange,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
+  const [pendingMessages, setPendingMessages] = useState<PendingMessage[]>([]);
   const [liveText, setLiveText] = useState("");
   const [liveTools, setLiveTools] = useState<Array<{ name: string; id: string }>>([]);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
@@ -97,14 +99,34 @@ export default function ChatTab({
     return () => { alive = false; };
   }, [officeSlug, agentId, refetchNonce]);
 
-  // Auto-ack done runs
+  // Fetch pending messages
   useEffect(() => {
-    const c = inspection?.current;
-    if (!c) return;
-    if (c.runStatus === "done" && c.runId && c.acknowledgedAt == null) {
-      void fetch(`/api/runs/${encodeURIComponent(c.runId)}/ack`, { method: "POST" }).catch(() => {});
-    }
-  }, [inspection]);
+    const fetchPendingMessages = async () => {
+      try {
+        const qs = new URLSearchParams({ office: officeSlug, agentId });
+        const res = await fetch(`/api/queue?${qs}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = (await res.json()) as { queuedPrompts: Array<{ id: string; prompt: string; queued_at: number }> };
+        setPendingMessages(json.queuedPrompts.map(q => ({
+          id: q.id,
+          text: q.prompt,
+          queuedAt: q.queued_at,
+        })));
+      } catch {
+        // ignore
+      }
+    };
+
+    fetchPendingMessages();
+
+    // Poll for updates every 3 seconds
+    const interval = setInterval(fetchPendingMessages, 3000);
+    return () => clearInterval(interval);
+  }, [officeSlug, agentId, refetchNonce]);
+
+  // No auto-ack here — the green checkmark on the sprite should persist
+  // until Connor explicitly clicks it (handled by handleAgentClick in page.tsx)
+  // or dismisses via the notification center.
 
   // SSE stream for active runs
   const runId = inspection?.current?.runId ?? null;
@@ -209,13 +231,25 @@ export default function ChatTab({
           .join("\n");
         prompt = fileBlock + (trimmed ? "\n\n" + trimmed : "");
       }
-      await fetch("/api/quick-run", {
+      const res = await fetch("/api/quick-run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ officeSlug, agentId, prompt }),
       });
       setChatText("");
       setAttachments([]);
+      // If the message was queued (agent busy), add it to pending messages
+      // immediately so the user sees it in the chat without waiting for the
+      // next 3s poll cycle.
+      if (res.ok) {
+        const json = await res.json() as { queued?: boolean; queueId?: string };
+        if (json.queued && json.queueId) {
+          setPendingMessages((prev) => [
+            ...prev,
+            { id: json.queueId!, text: prompt, queuedAt: Date.now() },
+          ]);
+        }
+      }
       setRefetchNonce((n) => n + 1);
     } finally {
       setChatPending(false);
@@ -224,6 +258,26 @@ export default function ChatTab({
 
   const onNewChat = async () => {
     if (resetting || isLive) return;
+
+    // Check for unpushed commits before resetting
+    try {
+      const gitRes = await fetch("/api/git-status", { cache: "no-store" });
+      if (gitRes.ok) {
+        const { unpushed, uncommitted } = await gitRes.json() as { unpushed: number; uncommitted: number };
+        if (unpushed > 0 || uncommitted > 0) {
+          const parts: string[] = [];
+          if (uncommitted > 0) parts.push(`${uncommitted} uncommitted change${uncommitted !== 1 ? "s" : ""}`);
+          if (unpushed > 0) parts.push(`${unpushed} unpushed commit${unpushed !== 1 ? "s" : ""}`);
+          const ok = window.confirm(
+            `Warning: You have ${parts.join(" and ")}.\n\nContinue with new chat anyway?`
+          );
+          if (!ok) return;
+        }
+      }
+    } catch {
+      // If git check fails, proceed anyway
+    }
+
     setResetting(true);
     try {
       const res = await fetch("/api/break", {
@@ -248,7 +302,7 @@ export default function ChatTab({
 
   const isReal = inspection?.agent?.isReal ?? false;
   const awaitingInput = runStatus === "awaiting_input";
-  const busy = chatPending || isLive || awaitingInput;
+  const busy = chatPending || awaitingInput; // Removed isLive - can send messages while agent is working
 
   return (
     <div
@@ -265,20 +319,24 @@ export default function ChatTab({
       )}
       {/* New chat button — top right */}
       {isReal && (
-        <button
-          type="button"
-          onClick={onNewChat}
-          disabled={resetting || isLive}
-          title="Start a new conversation (agent saves memory, then resets)"
-          className="absolute right-2 top-2 z-20 rounded border border-white/15 bg-black/70 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-white/40 backdrop-blur transition hover:border-white/30 hover:text-white/70 disabled:opacity-30"
-        >
-          {resetting ? "resetting…" : "new chat"}
-        </button>
+        <div className="absolute right-2 top-2 z-20">
+          <Tooltip label="Agent saves memory, then resets">
+            <button
+              type="button"
+              onClick={onNewChat}
+              disabled={resetting || isLive}
+              className="rounded border border-white/15 bg-black/70 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-white/40 backdrop-blur transition hover:border-white/30 hover:text-white/70 disabled:opacity-30"
+            >
+              {resetting ? "resetting..." : "new chat"}
+            </button>
+          </Tooltip>
+        </div>
       )}
 
       {/* Message area */}
       <MessageList
         messages={messages}
+        pendingMessages={pendingMessages}
         liveText={liveText}
         liveTools={liveTools}
         liveStatus={liveStatus}
@@ -334,15 +392,16 @@ export default function ChatTab({
               onChange={onFileChange}
             />
             {/* Attach button */}
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={busy || uploading}
-              title="Attach file"
-              className="shrink-0 rounded border border-white/20 bg-white/5 px-1.5 py-1 text-xs text-white/50 hover:bg-white/10 hover:text-white/80 disabled:opacity-40"
-            >
-              {uploading ? "⏳" : "📎"}
-            </button>
+            <Tooltip label="Attach file">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={busy || uploading}
+                className="shrink-0 rounded border border-white/20 bg-white/5 px-1.5 py-1 text-xs text-white/50 hover:bg-white/10 hover:text-white/80 disabled:opacity-40"
+              >
+                {uploading ? "\u23F3" : "\uD83D\uDCCE"}
+              </button>
+            </Tooltip>
             <input
               type="text"
               value={chatText}
@@ -350,8 +409,10 @@ export default function ChatTab({
               placeholder={
                 awaitingInput
                   ? "reply above…"
-                  : busy
-                  ? "agent is working…"
+                  : chatPending
+                  ? "sending…"
+                  : isLive
+                  ? `${agentName} is working… (your message will queue)`
                   : `talk to ${agentName}…`
               }
               disabled={busy}

@@ -1,10 +1,6 @@
 import Database from "better-sqlite3";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import paradiseRaw from "../config/paradise.office.json" with { type: "json" };
-import dontcallRaw from "../config/dontcall.office.json" with { type: "json" };
-import operationsRaw from "../config/operations.office.json" with { type: "json" };
-import launchosRaw from "../config/launchos.office.json" with { type: "json" };
 import type { OfficeConfig } from "../lib/office-types.js";
 
 const DB_DIR = join(process.cwd(), "data");
@@ -122,6 +118,39 @@ function migrate(d: Database.Database) {
       rate_limit_type TEXT,
       updated_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS error_log (
+      id TEXT PRIMARY KEY,
+      ts INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'error',
+      message TEXT NOT NULL,
+      stack TEXT,
+      agent_id TEXT,
+      office_slug TEXT,
+      run_id TEXT,
+      context TEXT,
+      acknowledged_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_error_log_ts ON error_log(ts);
+    CREATE INDEX IF NOT EXISTS idx_error_log_source ON error_log(source, ts);
+
+    CREATE TABLE IF NOT EXISTS tool_approvals (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES agent_runs(id),
+      agent_id TEXT NOT NULL,
+      office_slug TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      tool_input TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      requested_at INTEGER NOT NULL,
+      approved_at INTEGER,
+      approved_by TEXT,
+      denial_reason TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_tool_approvals_status ON tool_approvals(status, requested_at);
+    CREATE INDEX IF NOT EXISTS idx_tool_approvals_run ON tool_approvals(run_id);
   `);
 
   // Idempotent column additions for agent_runs (pre-existing DBs)
@@ -253,22 +282,14 @@ function seedIfEmpty(d: Database.Database) {
 // Read fresh from disk each call so newly-created agents are visible without a
 // server restart. Fall back to the bundled import if the file read fails.
 
-const FALLBACK_OFFICES: Record<string, OfficeConfig> = {
-  paradise: paradiseRaw as OfficeConfig,
-  dontcall: dontcallRaw as OfficeConfig,
-  operations: operationsRaw as OfficeConfig,
-  launchos: launchosRaw as OfficeConfig,
-};
-
 function loadOffice(officeSlug: string): OfficeConfig | null {
   try {
-    const raw = readFileSync(
-      join(process.cwd(), "config", `${officeSlug}.office.json`),
-      "utf-8",
-    );
+    const filePath = join(process.cwd(), "config", `${officeSlug}.office.json`);
+    if (!existsSync(filePath)) return null;
+    const raw = readFileSync(filePath, "utf-8");
     return JSON.parse(raw) as OfficeConfig;
   } catch {
-    return FALLBACK_OFFICES[officeSlug] ?? null;
+    return null;
   }
 }
 
@@ -623,4 +644,220 @@ export function queueDepth(officeSlug: string, agentId: string): number {
     )
     .get(agentId, officeSlug) as { n: number };
   return row.n;
+}
+
+// ---- Error log ----
+
+export type ErrorLogRow = {
+  id: string;
+  ts: number;
+  source: "runner" | "api" | "agent" | "frontend";
+  severity: "error" | "warn" | "fatal";
+  message: string;
+  stack: string | null;
+  agent_id: string | null;
+  office_slug: string | null;
+  run_id: string | null;
+  context: string | null;
+  acknowledged_at: number | null;
+};
+
+export function insertError(entry: {
+  source: ErrorLogRow["source"];
+  severity?: ErrorLogRow["severity"];
+  message: string;
+  stack?: string | null;
+  agentId?: string | null;
+  officeSlug?: string | null;
+  runId?: string | null;
+  context?: Record<string, unknown> | null;
+}): string {
+  const id = crypto.randomUUID();
+  db()
+    .prepare(
+      `INSERT INTO error_log (id, ts, source, severity, message, stack, agent_id, office_slug, run_id, context)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      Date.now(),
+      entry.source,
+      entry.severity ?? "error",
+      entry.message,
+      entry.stack ?? null,
+      entry.agentId ?? null,
+      entry.officeSlug ?? null,
+      entry.runId ?? null,
+      entry.context ? JSON.stringify(entry.context) : null,
+    );
+  return id;
+}
+
+export function queryErrors(opts?: {
+  source?: string;
+  severity?: string;
+  officeSlug?: string;
+  agentId?: string;
+  since?: number;
+  limit?: number;
+  includeAcked?: boolean;
+}): ErrorLogRow[] {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (opts?.source) {
+    conditions.push("source = ?");
+    params.push(opts.source);
+  }
+  if (opts?.severity) {
+    conditions.push("severity = ?");
+    params.push(opts.severity);
+  }
+  if (opts?.officeSlug) {
+    conditions.push("office_slug = ?");
+    params.push(opts.officeSlug);
+  }
+  if (opts?.agentId) {
+    conditions.push("agent_id = ?");
+    params.push(opts.agentId);
+  }
+  if (opts?.since) {
+    conditions.push("ts > ?");
+    params.push(opts.since);
+  }
+  if (!opts?.includeAcked) {
+    conditions.push("acknowledged_at IS NULL");
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limit = opts?.limit ?? 50;
+
+  return db()
+    .prepare(`SELECT * FROM error_log ${where} ORDER BY ts DESC LIMIT ?`)
+    .all(...params, limit) as ErrorLogRow[];
+}
+
+export function ackError(id: string): void {
+  db()
+    .prepare("UPDATE error_log SET acknowledged_at = ? WHERE id = ?")
+    .run(Date.now(), id);
+}
+
+export function ackAllErrors(): void {
+  db()
+    .prepare("UPDATE error_log SET acknowledged_at = ? WHERE acknowledged_at IS NULL")
+    .run(Date.now());
+}
+
+export function errorCount(since?: number): number {
+  const cutoff = since ?? Date.now() - 24 * 60 * 60 * 1000;
+  const row = db()
+    .prepare("SELECT COUNT(*) as n FROM error_log WHERE ts > ? AND acknowledged_at IS NULL")
+    .get(cutoff) as { n: number };
+  return row.n;
+}
+
+// ---- Tool Approvals ----
+
+export type ToolApprovalRow = {
+  id: string;
+  run_id: string;
+  agent_id: string;
+  office_slug: string;
+  tool_name: string;
+  tool_input: string;
+  tool_call_id: string;
+  status: "pending" | "approved" | "denied";
+  requested_at: number;
+  approved_at: number | null;
+  approved_by: string | null;
+  denial_reason: string | null;
+};
+
+/** Create a new tool approval request. Returns the approval ID. */
+export function requestToolApproval(entry: {
+  runId: string;
+  agentId: string;
+  officeSlug: string;
+  toolName: string;
+  toolInput: string;
+  toolCallId: string;
+}): string {
+  const id = crypto.randomUUID();
+  db()
+    .prepare(
+      `INSERT INTO tool_approvals (id, run_id, agent_id, office_slug, tool_name, tool_input, tool_call_id, requested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      entry.runId,
+      entry.agentId,
+      entry.officeSlug,
+      entry.toolName,
+      JSON.stringify(entry.toolInput),
+      entry.toolCallId,
+      Date.now()
+    );
+  return id;
+}
+
+/** Get pending tool approvals, optionally filtered by office or agent. */
+export function getPendingToolApprovals(opts?: {
+  officeSlug?: string;
+  agentId?: string;
+  limit?: number;
+}): ToolApprovalRow[] {
+  const conditions = ["status = 'pending'"];
+  const params: unknown[] = [];
+
+  if (opts?.officeSlug) {
+    conditions.push("office_slug = ?");
+    params.push(opts.officeSlug);
+  }
+  if (opts?.agentId) {
+    conditions.push("agent_id = ?");
+    params.push(opts.agentId);
+  }
+
+  const where = conditions.join(" AND ");
+  const limit = opts?.limit ?? 50;
+
+  return db()
+    .prepare(`SELECT * FROM tool_approvals WHERE ${where} ORDER BY requested_at ASC LIMIT ?`)
+    .all(...params, limit) as ToolApprovalRow[];
+}
+
+/** Approve a tool usage request. */
+export function approveToolUsage(approvalId: string, approvedBy: string = "user"): boolean {
+  const result = db()
+    .prepare(
+      "UPDATE tool_approvals SET status = 'approved', approved_at = ?, approved_by = ? WHERE id = ? AND status = 'pending'"
+    )
+    .run(Date.now(), approvedBy, approvalId);
+  return result.changes > 0;
+}
+
+/** Deny a tool usage request. */
+export function denyToolUsage(approvalId: string, reason?: string): boolean {
+  const result = db()
+    .prepare(
+      "UPDATE tool_approvals SET status = 'denied', approved_at = ?, denial_reason = ? WHERE id = ? AND status = 'pending'"
+    )
+    .run(Date.now(), reason ?? null, approvalId);
+  return result.changes > 0;
+}
+
+/** Get tool approval status by approval ID. */
+export function getToolApproval(approvalId: string): ToolApprovalRow | null {
+  return db()
+    .prepare("SELECT * FROM tool_approvals WHERE id = ?")
+    .get(approvalId) as ToolApprovalRow | undefined ?? null;
+}
+
+/** Check if a specific tool call has been approved. */
+export function getToolApprovalByCallId(runId: string, toolCallId: string): ToolApprovalRow | null {
+  return db()
+    .prepare("SELECT * FROM tool_approvals WHERE run_id = ? AND tool_call_id = ?")
+    .get(runId, toolCallId) as ToolApprovalRow | undefined ?? null;
 }

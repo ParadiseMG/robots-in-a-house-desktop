@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Tooltip from "@/components/ui/Tooltip";
 
 type SynthesisNotification = {
   kind: "synthesis";
@@ -33,10 +34,24 @@ type AwaitingInputNotification = {
   agentRole: string;
 };
 
+type ToolApprovalNotification = {
+  kind: "tool_approval";
+  approvalId: string;
+  runId: string;
+  at: number;
+  officeSlug: string;
+  agentId: string;
+  agentName: string;
+  agentRole: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+};
+
 type Notification =
   | SynthesisNotification
   | AgentRunNotification
-  | AwaitingInputNotification;
+  | AwaitingInputNotification
+  | ToolApprovalNotification;
 
 const URGENT_COLOR = "#fde047"; // amber — matches the `!` desk indicator
 
@@ -47,6 +62,8 @@ type Props = {
   onOpenWarRoom: (officeSlug: string, meetingId: string) => void;
   /** Focus the chat for this agent. */
   onOpenAgent: (officeSlug: string, agentId: string) => void;
+  /** Handle tool approval request. */
+  onToolApproval?: (approvalId: string, action: "approve" | "deny", reason?: string) => void;
 };
 
 const POLL_MS = 3000;
@@ -109,6 +126,7 @@ export default function NotificationCenter({
   officeAccents,
   onOpenWarRoom,
   onOpenAgent,
+  onToolApproval,
 }: Props) {
   const [notifs, setNotifs] = useState<Notification[]>([]);
   const [collapsed, setCollapsed] = useState(false);
@@ -137,11 +155,16 @@ export default function NotificationCenter({
         seenIdsRef.current = new Set(j.notifications.map((n) => n.runId));
         firstLoadRef.current = false;
 
-        // Sort: awaiting_input first (urgent), then by recency DESC
+        // Sort: urgent first (tool_approval and awaiting_input), then by recency DESC
         const sorted = [...j.notifications].sort((a, b) => {
-          const aUrgent = a.kind === "awaiting_input" ? 0 : 1;
-          const bUrgent = b.kind === "awaiting_input" ? 0 : 1;
+          const aUrgent = (a.kind === "awaiting_input" || a.kind === "tool_approval") ? 0 : 1;
+          const bUrgent = (b.kind === "awaiting_input" || b.kind === "tool_approval") ? 0 : 1;
           if (aUrgent !== bUrgent) return aUrgent - bUrgent;
+          // Within urgent, tool_approval comes first
+          if (aUrgent === 0 && bUrgent === 0) {
+            if (a.kind === "tool_approval" && b.kind !== "tool_approval") return -1;
+            if (b.kind === "tool_approval" && a.kind !== "tool_approval") return 1;
+          }
           return b.at - a.at;
         });
         setNotifs(sorted);
@@ -170,10 +193,10 @@ export default function NotificationCenter({
   };
 
   const dismissAll = async () => {
-    // Only dismiss non-urgent items — awaiting_input clears when the user replies
-    const dismissable = notifs.filter((n) => n.kind !== "awaiting_input");
+    // Only dismiss non-urgent items — awaiting_input and tool_approval require user action
+    const dismissable = notifs.filter((n) => n.kind !== "awaiting_input" && n.kind !== "tool_approval");
     const ids = dismissable.map((n) => n.runId);
-    setNotifs((prev) => prev.filter((n) => n.kind === "awaiting_input"));
+    setNotifs((prev) => prev.filter((n) => n.kind === "awaiting_input" || n.kind === "tool_approval"));
     await Promise.all(
       ids.map((id) =>
         fetch(`/api/runs/${encodeURIComponent(id)}/ack`, { method: "POST" }).catch(
@@ -190,13 +213,16 @@ export default function NotificationCenter({
     } else if (n.kind === "agent_run") {
       onOpenAgent(n.officeSlug, n.agentId);
       void dismiss(n.runId);
+    } else if (n.kind === "tool_approval") {
+      // Don't auto-open anything for tool approvals - they need explicit approve/deny action
+      return;
     } else {
       // awaiting_input — open chat so user can reply; do NOT ack (still active)
       onOpenAgent(n.officeSlug, n.agentId);
     }
   };
 
-  const urgentCount = notifs.filter((n) => n.kind === "awaiting_input").length;
+  const urgentCount = notifs.filter((n) => n.kind === "awaiting_input" || n.kind === "tool_approval").length;
   const dismissableCount = notifs.length - urgentCount;
 
   if (notifs.length === 0) return null;
@@ -231,8 +257,8 @@ export default function NotificationCenter({
         notifs.map((n) => {
           const accent = officeAccents.get(n.officeSlug) ?? "#10b981";
           const officeName = officeNames.get(n.officeSlug) ?? n.officeSlug;
-          const isUrgent = n.kind === "awaiting_input";
-          const isError = n.kind !== "awaiting_input" && n.status === "error";
+          const isUrgent = n.kind === "awaiting_input" || n.kind === "tool_approval";
+          const isError = n.kind !== "awaiting_input" && n.kind !== "tool_approval" && n.status === "error";
 
           // Color + label per kind
           const dotColor = isUrgent
@@ -250,7 +276,9 @@ export default function NotificationCenter({
             ? `${URGENT_COLOR}11`
             : "rgba(255,255,255,0.02)";
           const labelText =
-            n.kind === "awaiting_input"
+            n.kind === "tool_approval"
+              ? "approval needed"
+              : n.kind === "awaiting_input"
               ? "awaiting you"
               : n.kind === "synthesis"
               ? "findings ready"
@@ -258,13 +286,15 @@ export default function NotificationCenter({
               ? "error"
               : "done";
           const bodyText =
-            n.kind === "synthesis"
+            n.kind === "tool_approval"
+              ? `${n.agentName} wants to use ${n.toolName}`
+              : n.kind === "synthesis"
               ? n.promptSnippet
               : `${n.agentName} — ${n.agentRole}`;
 
           return (
             <div
-              key={n.runId}
+              key={n.kind === "tool_approval" ? n.approvalId : n.runId}
               className={`group relative flex flex-col gap-1 rounded border px-2.5 py-2 transition hover:bg-white/[0.06] ${
                 isUrgent ? "shadow-[0_0_0_1px_rgba(253,224,71,0.25)]" : ""
               }`}
@@ -304,24 +334,57 @@ export default function NotificationCenter({
                 >
                   {bodyText}
                 </div>
-                {isUrgent && (
+                {n.kind === "tool_approval" && (
+                  <>
+                    <div className="mt-1 text-[10px] leading-tight text-white/60">
+                      Input: {JSON.stringify(n.toolInput)}
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToolApproval?.(n.approvalId, "approve");
+                        }}
+                        className="rounded bg-green-600/80 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-white hover:bg-green-500/80"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const reason = prompt("Reason for denial (optional):");
+                          onToolApproval?.(n.approvalId, "deny", reason || undefined);
+                        }}
+                        className="rounded bg-red-600/80 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-white hover:bg-red-500/80"
+                      >
+                        Deny
+                      </button>
+                    </div>
+                  </>
+                )}
+                {n.kind === "awaiting_input" && (
                   <div className="mt-0.5 font-mono text-[9px] uppercase tracking-wider text-white/50">
                     click to reply →
                   </div>
                 )}
               </button>
               {!isUrgent && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void dismiss(n.runId);
-                  }}
-                  className="absolute right-1 top-1 rounded px-1 font-mono text-[10px] leading-none text-white/25 opacity-0 transition hover:text-white/80 group-hover:opacity-100"
-                  title="dismiss"
-                >
-                  ×
-                </button>
+                <div className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 transition">
+                  <Tooltip label="Dismiss">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void dismiss(n.runId);
+                      }}
+                      className="rounded px-1 font-mono text-[10px] leading-none text-white/25 hover:text-white/80"
+                    >
+                      x
+                    </button>
+                  </Tooltip>
+                </div>
               )}
             </div>
           );

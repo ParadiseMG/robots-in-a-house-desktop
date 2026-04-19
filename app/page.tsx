@@ -1,10 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import paradiseRaw from "@/config/paradise.office.json";
-import dontcallRaw from "@/config/dontcall.office.json";
-import operationsRaw from "@/config/operations.office.json";
-import launchosRaw from "@/config/launchos.office.json";
 import stationRaw from "@/config/station.json";
 import type {
   OfficeConfig,
@@ -18,21 +14,44 @@ import CommandPalette from "@/components/palette/CommandPalette";
 import UsageTracker from "@/components/usage/UsageTracker";
 import SpriteBubble from "@/components/sprite-bubble/SpriteBubble";
 import ChatDock, { DockTabsProvider } from "@/components/dock/ChatDock";
+import HeadsView from "@/components/views/HeadsView";
 import { useDockTabs } from "@/hooks/useDockTabs";
 import AgentHoverCard from "@/components/canvas/AgentHoverCard";
 import ActiveWarRooms from "@/components/events/ActiveWarRooms";
 import NotificationCenter from "@/components/notifications/NotificationCenter";
+import ErrorLog from "@/components/errors/ErrorLog";
+import Tooltip from "@/components/ui/Tooltip";
+import HealthBanner from "@/components/health/HealthBanner";
+import WelcomePrompt from "@/components/health/WelcomePrompt";
 import { useAmbientStream } from "@/hooks/useAmbientStream";
+import confetti from "canvas-confetti";
 
-const offices: Record<string, OfficeConfig> = {
-  paradise: paradiseRaw as OfficeConfig,
-  dontcall: dontcallRaw as OfficeConfig,
-  operations: operationsRaw as OfficeConfig,
-  launchos: launchosRaw as OfficeConfig,
-};
-const station = stationRaw as StationConfig;
-const order = ["operations", "paradise", "dontcall", "launchos"] as const;
-type OfficeSlug = (typeof order)[number];
+const stationBase = stationRaw as StationConfig;
+
+/** Build a station config that includes all loaded offices. */
+function buildStation(slugs: string[], offices: Record<string, OfficeConfig>): StationConfig {
+  // Start with modules from the static station.json for known offices
+  const existingModules = new Map(
+    stationBase.modules.map((m) => [m.office, m]),
+  );
+
+  // Add any new offices that aren't in station.json
+  const modules = [...stationBase.modules.filter((m) => slugs.includes(m.office))];
+  let nextX = modules.reduce((max, m) => Math.max(max, m.offsetX + 800), 0);
+
+  for (const slug of slugs) {
+    if (existingModules.has(slug)) continue;
+    modules.push({
+      office: slug,
+      offsetX: nextX,
+      offsetY: 0,
+      accent: offices[slug]?.theme?.accent ?? "#5aa0ff",
+    });
+    nextX += 800;
+  }
+
+  return { ...stationBase, modules };
+}
 
 const ROSTER_POLL_MS = 5_000;
 
@@ -80,24 +99,58 @@ export default function Home() {
 }
 
 function HomeInner() {
-  const { openOrFocus, openWarRoom, focusedTab } = useDockTabs();
+  const { openOrFocus, openWarRoom, focusedTab, tabs, reorder } = useDockTabs();
+
+  // Dynamic office loading
+  const [offices, setOffices] = useState<Record<string, OfficeConfig>>({});
+  const [order, setOrder] = useState<string[]>([]);
+  const [officesLoaded, setOfficesLoaded] = useState(false);
+  const [station, setStation] = useState<StationConfig>(stationBase);
+
+  useEffect(() => {
+    fetch("/api/offices")
+      .then((r) => r.json())
+      .then((data: { offices: Record<string, OfficeConfig>; slugs: string[] }) => {
+        setOffices(data.offices);
+        setOrder(data.slugs);
+        setStation(buildStation(data.slugs, data.offices));
+        setOfficesLoaded(true);
+        // Redirect to setup if no offices exist
+        if (data.slugs.length === 0) {
+          window.location.href = "/setup";
+        }
+      })
+      .catch(() => setOfficesLoaded(true));
+  }, []);
 
   // The office whose sidebar + roster data is shown. Always a real slug (never null).
-  const [sidebarSlug, setSidebarSlug] = useState<OfficeSlug>("paradise");
+  const [sidebarSlug, setSidebarSlug] = useState<string>("");
   // Whether the Pixi camera is focused on a module or in overview.
   // null = overview (camera fits both modules), string = slug of focused module.
-  const [focusedModule, setFocusedModule] = useState<OfficeSlug | null>(null);
+  const [focusedModule, setFocusedModule] = useState<string | null>(null);
+
+  // Set initial sidebar slug once offices load
+  useEffect(() => {
+    if (order.length > 0 && !sidebarSlug) {
+      setSidebarSlug(order[0]);
+    }
+  }, [order, sidebarSlug]);
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedDeskId, setSelectedDeskId] = useState<string | null>(null);
   const [showGrid, setShowGrid] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [viewMode, setViewMode] = useState<"canvas" | "grid">(() => {
+    if (typeof window === "undefined") return "canvas";
+    return (localStorage.getItem("ri-view-mode") as "canvas" | "grid") ?? "canvas";
+  });
 
   const [rosterEntries, setRosterEntries] = useState<RosterEntry[] | null>(
     null,
   );
   const [bubble, setBubble] = useState<{
     deskId: string;
-    officeSlug: OfficeSlug;
+    officeSlug: string;
     x: number;
     y: number;
     mode: "task" | "reply";
@@ -105,7 +158,7 @@ function HomeInner() {
   } | null>(null);
   const [hoverCard, setHoverCard] = useState<{
     deskId: string;
-    officeSlug: OfficeSlug;
+    officeSlug: string;
     x: number;
     y: number;
   } | null>(null);
@@ -155,7 +208,7 @@ function HomeInner() {
       await Promise.all(
         runningEntries.map(async (entry) => {
           try {
-            const slug = order.find((s) => offices[s].agents.some((a) => a.id === entry.agent.id));
+            const slug = order.find((s) => offices[s]?.agents.some((a) => a.id === entry.agent.id));
             if (!slug) return;
             const res = await fetch(
               `/api/inspector?office=${encodeURIComponent(slug)}&deskId=${encodeURIComponent(entry.agent.deskId)}`,
@@ -189,21 +242,22 @@ function HomeInner() {
 
   // Restore sidebar slug + desk selection from localStorage on mount
   useEffect(() => {
-    const stored = localStorage.getItem("ri-office") as OfficeSlug | null;
-    if (stored === "paradise" || stored === "dontcall" || stored === "operations" || stored === "launchos") {
+    if (order.length === 0) return;
+    const stored = localStorage.getItem("ri-office") as string | null;
+    if (stored && order.includes(stored)) {
       setSidebarSlug(stored);
       const storedDesk = localStorage.getItem(`ri-desk-${stored}`);
       if (storedDesk) setSelectedDeskId(storedDesk);
     }
     const storedFocus = localStorage.getItem(
       "ri-focus",
-    ) as OfficeSlug | "overview" | null;
-    if (storedFocus === "paradise" || storedFocus === "dontcall" || storedFocus === "operations" || storedFocus === "launchos") {
+    ) as string | "overview" | null;
+    if (storedFocus && order.includes(storedFocus)) {
       setFocusedModule(storedFocus);
     }
-  }, []);
+  }, [order]);
 
-  const focusModule = useCallback((slug: OfficeSlug | null) => {
+  const focusModule = useCallback((slug: string | null) => {
     setFocusedModule(slug);
     localStorage.setItem("ri-focus", slug ?? "overview");
     if (slug) {
@@ -229,7 +283,7 @@ function HomeInner() {
   }, [focusModule]);
 
   const selectDesk = useCallback(
-    (deskId: string | null, officeSlug?: OfficeSlug) => {
+    (deskId: string | null, officeSlug?: string) => {
       const slug = officeSlug ?? sidebarSlug;
       if (deskId) {
         setSidebarSlug(slug);
@@ -280,6 +334,7 @@ function HomeInner() {
 
   // Poll roster for sidebar slug — drives Pixi indicators too
   const refetchRoster = useCallback(async () => {
+    if (order.length === 0) return;
     try {
       const results = await Promise.all(
         order.map((slug) =>
@@ -293,7 +348,7 @@ function HomeInner() {
     } catch {
       // ignore
     }
-  }, []);
+  }, [order]);
 
   useEffect(() => {
     void refetchRoster();
@@ -328,6 +383,52 @@ function HomeInner() {
     return m;
   }, [rosterEntries]);
 
+  // Fire confetti over the agent card/sprite that just finished
+  const prevRunStatuses = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (!rosterEntries) return;
+    const justFinished: string[] = [];
+    for (const e of rosterEntries) {
+      const c = e.current;
+      if (!c) continue;
+      const prev = prevRunStatuses.current.get(e.agent.deskId);
+      if (
+        c.runStatus === "done" &&
+        prev &&
+        prev !== "done" &&
+        !c.acknowledgedAt
+      ) {
+        justFinished.push(e.agent.deskId);
+      }
+      if (c.runStatus) prevRunStatuses.current.set(e.agent.deskId, c.runStatus);
+    }
+    for (const deskId of justFinished) {
+      // Find the element on screen — prefer larger card over tab button
+      const all = document.querySelectorAll(`[data-desk-id="${deskId}"]`);
+      let bestRect: DOMRect | undefined;
+      let bestArea = 0;
+      all.forEach((node) => {
+        const r = node.getBoundingClientRect();
+        const area = r.width * r.height;
+        if (area > bestArea) { bestArea = area; bestRect = r; }
+      });
+      const rect = bestRect;
+      const originX = rect
+        ? (rect.left + rect.width / 2) / window.innerWidth
+        : 0.5;
+      const originY = rect
+        ? (rect.top + rect.height / 3) / window.innerHeight
+        : 0.7;
+      void confetti({
+        particleCount: 60,
+        spread: 55,
+        origin: { x: originX, y: originY },
+        colors: ["#22d3ee", "#a78bfa", "#34d399", "#fbbf24", "#f472b6"],
+        disableForReducedMotion: true,
+      });
+    }
+  }, [rosterEntries]);
+
   // Map of deskId → count of active child runs this agent delegated.
   // Drives satellite dots around the delegator's sprite.
   const delegationsByDesk = useMemo(() => {
@@ -354,6 +455,21 @@ function HomeInner() {
     return links;
   }, [rosterEntries]);
 
+  // Map delegator agentId → names of agents they're currently delegating to.
+  const delegateeNamesByAgent = useMemo(() => {
+    const nameMap = new Map<string, string>();
+    for (const e of rosterEntries ?? []) nameMap.set(e.agent.id, e.agent.name);
+    const m = new Map<string, string[]>();
+    for (const e of rosterEntries ?? []) {
+      const delegatorId = (e as { delegatedByAgentId?: string | null }).delegatedByAgentId;
+      if (!delegatorId) continue;
+      const names = m.get(delegatorId) ?? [];
+      names.push(e.agent.name);
+      m.set(delegatorId, names);
+    }
+    return m;
+  }, [rosterEntries]);
+
   const deskRunStatus = useMemo(() => {
     const m = new Map<string, string>();
     for (const e of rosterEntries ?? []) {
@@ -362,6 +478,8 @@ function HomeInner() {
       if (status === "done") {
         // Only colour the tab while unacknowledged
         if (!e.current?.acknowledgedAt) m.set(e.agent.deskId, "done_unacked");
+      } else if ((status === "running" || status === "starting") && (e.activeDelegations ?? 0) > 0) {
+        m.set(e.agent.deskId, "delegating");
       } else {
         m.set(e.agent.deskId, status);
       }
@@ -373,15 +491,11 @@ function HomeInner() {
   const agentByDesk = useMemo(() => {
     const m = new Map<
       string,
-      { id: string; isReal: boolean; officeSlug: OfficeSlug }
+      { id: string; isReal: boolean; officeSlug: string }
     >();
     for (const slug of order) {
-      for (const a of offices[slug].agents) {
-        m.set(a.deskId, {
-          id: a.id,
-          isReal: a.isReal,
-          officeSlug: slug,
-        });
+      for (const a of (offices[slug]?.agents ?? [])) {
+        m.set(a.deskId, { id: a.id, isReal: a.isReal, officeSlug: slug });
       }
     }
     return m;
@@ -395,6 +509,68 @@ function HomeInner() {
     return m;
   }, [rosterEntries]);
 
+  // All agents for the quick view (heads + pinnable)
+  const allQuickViewAgents = useMemo(() => {
+    const agents: Array<{
+      id: string; deskId: string; name: string; role: string;
+      officeSlug: string; officeName: string; accent: string;
+      premade: string | null; status: string | null;
+      activeDelegations: number; teamSize: number; isHead: boolean;
+    }> = [];
+    for (const slug of order) {
+      const office = offices[slug];
+      if (!office) continue;
+      const stationModule = station.modules.find((m) => m.office === slug);
+      const teamSize = office.agents.filter((a) => a.isReal).length;
+      for (const a of office.agents) {
+        if (!a.isReal) continue;
+        const entry = rosterEntries?.find((e) => e.agent.id === a.id);
+        agents.push({
+          id: a.id,
+          deskId: a.deskId,
+          name: a.name,
+          role: a.role,
+          officeSlug: slug,
+          officeName: office.name,
+          accent: stationModule?.accent ?? office.theme.accent,
+          premade: a.visual?.premade ?? null,
+          status: entry?.current?.runStatus ?? null,
+          activeDelegations: entry?.activeDelegations ?? 0,
+          teamSize,
+          isHead: a.isHead ?? false,
+        });
+      }
+    }
+    return agents;
+  }, [rosterEntries]);
+
+  const headAgents = useMemo(
+    () => allQuickViewAgents.filter((a) => a.isHead),
+    [allQuickViewAgents],
+  );
+
+  // Pinned agent IDs for quick view (persisted to localStorage)
+  const [quickViewPins, setQuickViewPins] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      return JSON.parse(localStorage.getItem("ri-quickview-pins") ?? "[]");
+    } catch { return []; }
+  });
+  const pinAgent = (id: string) => {
+    setQuickViewPins((prev) => {
+      const next = [...prev, id];
+      localStorage.setItem("ri-quickview-pins", JSON.stringify(next));
+      return next;
+    });
+  };
+  const unpinAgent = (id: string) => {
+    setQuickViewPins((prev) => {
+      const next = prev.filter((p) => p !== id);
+      localStorage.setItem("ri-quickview-pins", JSON.stringify(next));
+      return next;
+    });
+  };
+
   const handleAgentClick = useCallback(
     (
       officeSlug: string,
@@ -403,7 +579,7 @@ function HomeInner() {
       clientY: number,
       shiftKey?: boolean,
     ) => {
-      const slug = officeSlug as OfficeSlug;
+      const slug = officeSlug as string;
       // Keep sidebar context in sync
       if (slug !== sidebarSlug) {
         setSidebarSlug(slug);
@@ -469,7 +645,7 @@ function HomeInner() {
       deskId: string,
       e: React.DragEvent<HTMLDivElement>,
     ) => {
-      const slug = officeSlug as OfficeSlug;
+      const slug = officeSlug as string;
       const taskId = e.dataTransfer.getData("application/x-robot-task");
       if (!taskId) return;
       const agent = agentByDesk.get(deskId);
@@ -549,6 +725,21 @@ function HomeInner() {
     [bubble, agentByDesk, selectDesk, refetchRoster],
   );
 
+  const handleToolApproval = useCallback(
+    async (approvalId: string, action: "approve" | "deny", reason?: string) => {
+      try {
+        await fetch(`/api/tool-approvals/${encodeURIComponent(approvalId)}/resolve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, reason }),
+        });
+      } catch (error) {
+        console.error("Failed to resolve tool approval:", error);
+      }
+    },
+    [],
+  );
+
   const handleAgentMove = useCallback(
     async (
       officeSlug: string,
@@ -576,11 +767,11 @@ function HomeInner() {
   );
 
   const officeContainerRef = useRef<HTMLDivElement | null>(null);
-  const sidebarOffice = offices[sidebarSlug];
+  const sidebarOffice = offices[sidebarSlug] ?? offices[order[0]];
 
   const allAgentsForDock = useMemo(() => {
     return order.flatMap((slug) =>
-      offices[slug].agents.map((a) => ({
+      (offices[slug]?.agents ?? []).map((a) => ({
         id: a.id,
         name: a.name,
         role: a.role,
@@ -589,26 +780,41 @@ function HomeInner() {
         officeSlug: slug,
       })),
     );
-  }, []);
+  }, [offices, order]);
 
   // Lookup maps for ActiveWarRooms
   const agentNameMap = useMemo(() => {
     const m = new Map<string, string>();
     for (const slug of order) {
-      for (const a of offices[slug].agents) m.set(a.id, a.name);
+      for (const a of (offices[slug]?.agents ?? [])) m.set(a.id, a.name);
     }
     return m;
-  }, []);
+  }, [offices, order]);
   const officeNameMap = useMemo(() => {
     const m = new Map<string, string>();
-    for (const slug of order) m.set(slug, offices[slug].name);
+    for (const slug of order) {
+      if (offices[slug]) m.set(slug, (offices[slug]?.name ?? slug));
+    }
     return m;
-  }, []);
+  }, [offices, order]);
   const officeAccentMap = useMemo(() => {
     const m = new Map<string, string>();
-    for (const slug of order) m.set(slug, offices[slug].theme.accent);
+    for (const slug of order) {
+      if (offices[slug]) m.set(slug, (offices[slug]?.theme ?? { accent: "#5aa0ff" }).accent);
+    }
     return m;
-  }, []);
+  }, [offices, order]);
+
+  // Loading state while offices are being fetched
+  if (!officesLoaded || order.length === 0) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-black text-white">
+        <div className="font-mono text-xs text-white/30">loading workspaces...</div>
+      </div>
+    );
+  }
+
+  const sidebarOfficeSlug = sidebarSlug || order[0];
 
   return (
     <div className="flex h-screen w-screen flex-col bg-black text-white">
@@ -616,82 +822,130 @@ function HomeInner() {
         <div className="font-mono tracking-tight">robots-in-a-house</div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => {
-                const idx = focusedModule ? order.indexOf(focusedModule) : 0;
-                focusModule(order[(idx - 1 + order.length) % order.length]);
-              }}
-              className="rounded px-1.5 py-0.5 font-mono text-xs opacity-50 transition hover:bg-white/10 hover:opacity-100"
-              title="Previous office"
-            >
-              ‹
-            </button>
+            <Tooltip label="Previous office" position="bottom">
+              <button
+                onClick={() => {
+                  const idx = focusedModule ? order.indexOf(focusedModule) : 0;
+                  focusModule(order[(idx - 1 + order.length) % order.length]);
+                }}
+                className="rounded px-1.5 py-0.5 font-mono text-xs opacity-50 transition hover:bg-white/10 hover:opacity-100"
+              >
+                ‹
+              </button>
+            </Tooltip>
             <div className="font-mono text-xs opacity-60">
               station: {station.name}
               {focusedModule ? ` · ${offices[focusedModule].name}` : " · overview"}
             </div>
-            <button
-              onClick={() => {
-                const idx = focusedModule ? order.indexOf(focusedModule) : -1;
-                focusModule(order[(idx + 1) % order.length]);
-              }}
-              className="rounded px-1.5 py-0.5 font-mono text-xs opacity-50 transition hover:bg-white/10 hover:opacity-100"
-              title="Next office"
-            >
-              ›
-            </button>
+            <Tooltip label="Next office" position="bottom">
+              <button
+                onClick={() => {
+                  const idx = focusedModule ? order.indexOf(focusedModule) : -1;
+                  focusModule(order[(idx + 1) % order.length]);
+                }}
+                className="rounded px-1.5 py-0.5 font-mono text-xs opacity-50 transition hover:bg-white/10 hover:opacity-100"
+              >
+                ›
+              </button>
+            </Tooltip>
           </div>
         </div>
       </header>
+      <HealthBanner />
       <div className="flex flex-1 flex-col overflow-hidden">
           <main
             className="relative min-h-0 flex-1 overflow-hidden"
             ref={officeContainerRef}
           >
-            <Station
-              station={station}
-              offices={offices}
-              focusedModule={focusedModule}
-              busyDeskIds={busyDeskIds}
-              agentStatus={agentStatus}
-              delegationsByDesk={delegationsByDesk}
-              delegationLinks={delegationLinks}
-              selectedDeskId={selectedDeskId}
-              onDeskSelect={(deskId) => selectDesk(deskId)}
-              onAgentClick={handleAgentClick}
-              onDeskDrop={handleDeskDrop}
-              onAgentMove={handleAgentMove}
-              onModuleFocus={(slug) => focusModule(slug as OfficeSlug)}
-              onWarRoomClick={(slug) => {
-                if (slug === "paradise" || slug === "dontcall" || slug === "operations" || slug === "launchos") {
-                  const office = offices[slug];
-                  openWarRoom(slug, office ? `${office.name} War Room` : "War Room");
-                }
-              }}
-              onAgentHover={(officeSlug, deskId, clientX, clientY) => {
-                setHoverCard({ deskId, officeSlug: officeSlug as OfficeSlug, x: clientX, y: clientY });
-              }}
-              onAgentHoverOut={() => setHoverCard(null)}
-              onAgentPositions={(positions) => {
-                agentPositionsRef.current = positions;
-              }}
-              contextUsage={contextUsage}
-              showGrid={showGrid}
-            />
-            {/* Active war rooms — top-right overlay */}
-            <div className="pointer-events-auto absolute right-3 top-3 z-20 w-64">
-              <ActiveWarRooms
-                agentNames={agentNameMap}
-                officeNames={officeNameMap}
-                officeAccents={officeAccentMap}
-                onOpen={(slug, meetingId) => {
-                  const office = offices[slug];
-                  openWarRoom(slug, office ? `${office.name} War Room` : "War Room", meetingId);
-                }}
-              />
+            {/* Toolbar — top-left (persists across views) */}
+            <div className="pointer-events-auto absolute left-3 top-3 z-30 flex gap-2">
+              <Tooltip label="Settings" position="bottom">
+              <button
+                type="button"
+                onClick={() => setShowSettings((v) => !v)}
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
+              >
+                <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
+                  <rect x="6" y="0" width="4" height="2" fill="currentColor" />
+                  <rect x="6" y="14" width="4" height="2" fill="currentColor" />
+                  <rect x="0" y="6" width="2" height="4" fill="currentColor" />
+                  <rect x="14" y="6" width="2" height="4" fill="currentColor" />
+                  <rect x="1" y="1" width="3" height="3" fill="currentColor" />
+                  <rect x="12" y="1" width="3" height="3" fill="currentColor" />
+                  <rect x="1" y="12" width="3" height="3" fill="currentColor" />
+                  <rect x="12" y="12" width="3" height="3" fill="currentColor" />
+                  <rect x="3" y="3" width="10" height="10" fill="currentColor" />
+                  <rect x="5" y="5" width="6" height="6" fill="#1a1a2e" />
+                </svg>
+              </button>
+              </Tooltip>
+              <Tooltip label={viewMode === "canvas" ? "Switch to grid view" : "Switch to canvas view"} position="bottom">
+              <button
+                type="button"
+                onClick={() => setViewMode((v) => {
+                  const next = v === "canvas" ? "grid" : "canvas";
+                  localStorage.setItem("ri-view-mode", next);
+                  return next;
+                })}
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
+              >
+                <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
+                  <rect x="1" y="1" width="14" height="14" fill="currentColor" />
+                  <rect x="2" y="2" width="5" height="5" fill="#1a1a2e" />
+                  <rect x="9" y="2" width="5" height="5" fill="#1a1a2e" />
+                  <rect x="2" y="9" width="5" height="5" fill="#1a1a2e" />
+                  <rect x="9" y="9" width="5" height="5" fill="#1a1a2e" />
+                </svg>
+              </button>
+              </Tooltip>
             </div>
-            {/* Notifications — top-left overlay */}
-            <div className="pointer-events-auto absolute left-3 top-3 z-20 w-64">
+            {/* Tool buttons — top-right (persists across views) */}
+            <div className="pointer-events-auto absolute right-3 top-3 z-30 flex gap-2">
+              <Tooltip label="Workspace Builder" position="bottom">
+              <a
+                href="/workspace-builder"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
+              >
+                <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
+                  <rect x="7" y="1" width="2" height="1" fill="currentColor" />
+                  <rect x="5" y="2" width="6" height="1" fill="currentColor" />
+                  <rect x="3" y="3" width="10" height="1" fill="currentColor" />
+                  <rect x="3" y="4" width="10" height="7" fill="currentColor" />
+                  <rect x="7" y="8" width="2" height="3" fill="#1a1a2e" />
+                  <rect x="4" y="5" width="2" height="2" fill="#facc15" />
+                  <rect x="10" y="5" width="2" height="2" fill="#facc15" />
+                  <rect x="10" y="0" width="2" height="3" fill="currentColor" />
+                </svg>
+              </a>
+              </Tooltip>
+              <Tooltip label="Sprite Maker" position="bottom">
+              <a
+                href="/sprite-maker"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
+              >
+                <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
+                  <rect x="5" y="1" width="4" height="4" fill="currentColor" rx="0" />
+                  <rect x="6" y="5" width="2" height="3" fill="currentColor" />
+                  <rect x="4" y="6" width="2" height="1" fill="currentColor" />
+                  <rect x="8" y="6" width="2" height="1" fill="currentColor" />
+                  <rect x="5" y="8" width="2" height="3" fill="currentColor" />
+                  <rect x="7" y="8" width="2" height="3" fill="currentColor" />
+                  <rect x="12" y="1" width="1" height="3" fill="#facc15" />
+                  <rect x="11" y="2" width="3" height="1" fill="#facc15" />
+                  <rect x="10" y="0" width="1" height="1" fill="#facc15" opacity="0.5" />
+                  <rect x="14" y="0" width="1" height="1" fill="#facc15" opacity="0.5" />
+                  <rect x="10" y="4" width="1" height="1" fill="#facc15" opacity="0.5" />
+                  <rect x="14" y="4" width="1" height="1" fill="#facc15" opacity="0.5" />
+                </svg>
+              </a>
+              </Tooltip>
+            </div>
+            {/* Notifications — top-left, below toolbar (canvas view only) */}
+            {viewMode === "canvas" && <div className="pointer-events-auto absolute left-3 top-14 z-20 w-64 flex flex-col gap-2">
               <NotificationCenter
                 officeNames={officeNameMap}
                 officeAccents={officeAccentMap}
@@ -714,6 +968,90 @@ function HomeInner() {
                     kind: "1:1",
                     label: agentConfig.name,
                   });
+                }}
+                onToolApproval={handleToolApproval}
+              />
+              <ErrorLog
+                officeNames={officeNameMap}
+                activeOfficeSlug={sidebarSlug}
+                activeAgentId={focusedTab?.agentId ?? null}
+                onOpenAgent={(slug, agentId) => {
+                  const agentConfig = offices[slug]?.agents.find((a) => a.id === agentId);
+                  if (!agentConfig) return;
+                  openOrFocus({
+                    id: agentId,
+                    agentId,
+                    deskId: agentConfig.deskId,
+                    officeSlug: slug,
+                    kind: "1:1",
+                    label: agentConfig.name,
+                  });
+                }}
+              />
+            </div>}
+            {viewMode === "grid" ? (
+              <HeadsView
+                heads={headAgents}
+                pinnedIds={quickViewPins}
+                allAgents={allQuickViewAgents}
+                tabOrder={tabs.filter((t) => t.kind === "1:1" && t.agentId).map((t) => t.agentId!)}
+                onChat={(agent) => {
+                  openOrFocus({
+                    id: agent.id,
+                    agentId: agent.id,
+                    deskId: agent.deskId,
+                    officeSlug: agent.officeSlug,
+                    kind: "1:1",
+                    label: agent.name,
+                  });
+                }}
+                onPin={pinAgent}
+                onUnpin={unpinAgent}
+                onReorder={(fromId, toId) => {
+                  // Reorder dock tabs to match card drag
+                  reorder(fromId, toId);
+                }}
+              />
+            ) : (<>
+            <Station
+              station={station}
+              offices={offices}
+              focusedModule={focusedModule}
+              busyDeskIds={busyDeskIds}
+              agentStatus={agentStatus}
+              delegationsByDesk={delegationsByDesk}
+              delegationLinks={delegationLinks}
+              selectedDeskId={selectedDeskId}
+              onDeskSelect={(deskId) => selectDesk(deskId)}
+              onAgentClick={handleAgentClick}
+              onDeskDrop={handleDeskDrop}
+              onAgentMove={handleAgentMove}
+              onModuleFocus={(slug) => focusModule(slug as string)}
+              onWarRoomClick={(slug) => {
+                if (offices[slug]) {
+                  const office = offices[slug];
+                  openWarRoom(slug, `${office.name} War Room`);
+                }
+              }}
+              onAgentHover={(officeSlug, deskId, clientX, clientY) => {
+                setHoverCard({ deskId, officeSlug: officeSlug as string, x: clientX, y: clientY });
+              }}
+              onAgentHoverOut={() => setHoverCard(null)}
+              onAgentPositions={(positions) => {
+                agentPositionsRef.current = positions;
+              }}
+              contextUsage={contextUsage}
+              showGrid={showGrid}
+            />
+            {/* Active war rooms — top-right overlay, below tool buttons */}
+            <div className="pointer-events-auto absolute right-3 top-14 z-20 w-64">
+              <ActiveWarRooms
+                agentNames={agentNameMap}
+                officeNames={officeNameMap}
+                officeAccents={officeAccentMap}
+                onOpen={(slug, meetingId) => {
+                  const office = offices[slug];
+                  openWarRoom(slug, office ? `${office.name} War Room` : "War Room", meetingId);
                 }}
               />
             </div>
@@ -793,6 +1131,7 @@ function HomeInner() {
                 );
               })}
             </div>
+            </>)}
           </main>
           {hoverCard && (() => {
             const agent = agentByDesk.get(hoverCard.deskId);
@@ -820,6 +1159,8 @@ function HomeInner() {
                   tokens: null,
                 } : null}
                 queueDepth={rosterEntry?.queueDepth ?? 0}
+                activeDelegations={rosterEntry?.activeDelegations ?? 0}
+                delegateeNames={rosterEntry ? (delegateeNamesByAgent.get(rosterEntry.agent.id) ?? []) : []}
                 anchorX={hoverCard.x}
                 anchorY={hoverCard.y}
                 onDismiss={() => setHoverCard(null)}
@@ -832,6 +1173,7 @@ function HomeInner() {
             rosterEntries={rosterEntries ?? []}
             offices={offices}
             deskRunStatus={deskRunStatus}
+            activeOfficeSlug={sidebarSlug}
             onAckDesk={(deskId) => {
               const runId = runByDesk.get(deskId);
               if (runId) {
@@ -839,6 +1181,22 @@ function HomeInner() {
                   .then(() => refetchRoster())
                   .catch(() => {});
               }
+            }}
+          />
+          <WelcomePrompt
+            headAgentName={sidebarOffice.agents.find((a) => a.isHead)?.name ?? sidebarOffice.agents[0]?.name ?? null}
+            headAgentId={sidebarOffice.agents.find((a) => a.isHead)?.id ?? sidebarOffice.agents[0]?.id ?? null}
+            officeSlug={sidebarSlug}
+            onTryIt={async (agentId, slug, prompt) => {
+              const agent = sidebarOffice.agents.find((a) => a.id === agentId);
+              if (!agent) return;
+              await fetch("/api/quick-run", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ officeSlug: slug, agentId, prompt }),
+              }).catch(() => {});
+              if (agent.isReal) selectDesk(agent.deskId);
+              void refetchRoster();
             }}
           />
           <PromptBar
@@ -852,8 +1210,8 @@ function HomeInner() {
       </div>
       <CommandPalette
         slug={sidebarSlug}
-        allOffices={order.map((s) => ({ slug: s, name: offices[s].name, agents: offices[s].agents }))}
-        onSwitchOffice={(slug) => focusModule(slug as OfficeSlug)}
+        allOffices={order.map((s) => ({ slug: s, name: offices[s]?.name ?? s, agents: offices[s]?.agents ?? [] }))}
+        onSwitchOffice={(slug) => focusModule(slug as string)}
         onFocusAgent={(deskId) => selectDesk(deskId)}
       />
     </div>

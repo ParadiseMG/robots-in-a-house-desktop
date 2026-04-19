@@ -1,0 +1,57 @@
+{
+  "slug": "example",
+  "name": "Example Office",
+  "theme": {
+    "floor": "#303034",
+    "floorAlt": "#3c3c42",
+    "wall": "#18181c",
+    "deskTop": "#4a4a50",
+    "deskSide": "#303034",
+    "accent": "#5aa0ff",
+    "highlight": "#88bbff",
+    "bg": "#1a2030",
+    "premadeRoom": {
+      "layers": ["japanese_lounge_layer1.png"],
+      "pixelWidth": 304,
+      "pixelHeight": 214,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "tile": { "w": 48, "h": 48 },
+  "grid": { "cols": 19, "rows": 14 },
+  "rooms": [
+    { "id": "main", "name": "Main", "gridX": 1, "gridY": 1, "w": 8, "h": 6 }
+  ],
+  "desks": [
+    { "id": "desk-director", "roomId": "main", "gridX": 9, "gridY": 6, "facing": "S" },
+    { "id": "desk-builder", "roomId": "main", "gridX": 7, "gridY": 8, "facing": "S" }
+  ],
+  "agents": [
+    {
+      "id": "director",
+      "deskId": "desk-director",
+      "name": "Director",
+      "role": "Planning Lead",
+      "spritePack": "limezu/office/auto",
+      "visual": { "premade": "premade_08.png" },
+      "isReal": true,
+      "isHead": true,
+      "cwd": "agent-workspaces/example/director",
+      "model": "claude-opus-4-6",
+      "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "WebFetch"]
+    },
+    {
+      "id": "builder",
+      "deskId": "desk-builder",
+      "name": "Builder",
+      "role": "Implementation Engineer",
+      "spritePack": "limezu/office/auto",
+      "visual": { "premade": "premade_03.png" },
+      "isReal": true,
+      "cwd": "agent-workspaces/example/builder",
+      "model": "claude-sonnet-4-20250514",
+      "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "WebFetch"]
+    }
+  ]
+}

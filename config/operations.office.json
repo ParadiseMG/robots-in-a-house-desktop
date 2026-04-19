@@ -137,6 +137,13 @@
       "gridX": 8,
       "gridY": 1,
       "facing": "S"
+    },
+    {
+      "id": "desk-einstein",
+      "roomId": "control",
+      "gridX": 10,
+      "gridY": 7,
+      "facing": "S"
     }
   ],
   "agents": [
@@ -263,7 +270,7 @@
     {
       "id": "vault",
       "deskId": "desk-vault",
-      "name": "Vault",
+      "name": "Lockbox",
       "role": "Security Engineer",
       "spritePack": "limezu/office/auto",
       "visual": {
@@ -398,6 +405,20 @@
         "WebFetch"
       ],
       "model": "claude-opus-4-6"
+    },
+    {
+      "id": "einstein",
+      "deskId": "desk-einstein",
+      "name": "Einstein",
+      "role": "Ideas & Knowledge Manager",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_11.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/operations/einstein",
+      "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash"],
+      "model": "claude-sonnet-4-20250514"
     }
   ]
 }

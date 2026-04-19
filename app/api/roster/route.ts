@@ -1,27 +1,17 @@
 import { NextResponse } from "next/server";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { db, queueDepth, activeDelegationsByDelegator, activeDelegationLinks } from "@/server/db";
 import type { OfficeConfig } from "@/lib/office-types";
-
-const VALID_SLUGS = new Set(["paradise", "dontcall", "operations", "launchos"]);
+import { withErrorReporting } from "@/lib/api-error-handler";
+import { isValidOfficeSlug, loadOfficeConfig } from "@/lib/config-loader";
 
 async function loadOffice(slug: string): Promise<OfficeConfig | null> {
-  if (!VALID_SLUGS.has(slug)) return null;
-  try {
-    const raw = await fs.readFile(
-      path.join(process.cwd(), "config", `${slug}.office.json`),
-      "utf-8",
-    );
-    return JSON.parse(raw) as OfficeConfig;
-  } catch {
-    return null;
-  }
+  if (!isValidOfficeSlug(slug)) return null;
+  return loadOfficeConfig(slug);
 }
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request) {
+export const GET = withErrorReporting("GET /api/roster", async (req: Request) => {
   const url = new URL(req.url);
   const officeSlug = url.searchParams.get("office");
   if (!officeSlug) {
@@ -135,4 +125,4 @@ export async function GET(req: Request) {
   });
 
   return NextResponse.json({ officeSlug, entries });
-}
+});

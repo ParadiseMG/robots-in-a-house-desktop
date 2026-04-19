@@ -22,6 +22,8 @@ type Props = {
   agent: AgentInfo;
   run?: RunInfo | null;
   queueDepth?: number;
+  activeDelegations?: number;
+  delegateeNames?: string[];
   /** Client-space position of the sprite centre */
   anchorX: number;
   anchorY: number;
@@ -39,13 +41,14 @@ const modelLabel = (m: string | null) => {
 const statusColor = (s: string | null) => {
   if (!s) return "text-white/40";
   if (s === "running" || s === "starting") return "text-amber-300";
+  if (s === "delegating") return "text-purple-300";
   if (s === "done") return "text-emerald-300";
   if (s === "awaiting_input") return "text-yellow-200";
   if (s === "error") return "text-red-300";
   return "text-white/40";
 };
 
-export default function AgentHoverCard({ agent, run, queueDepth, anchorX, anchorY, onDismiss }: Props) {
+export default function AgentHoverCard({ agent, run, queueDepth, activeDelegations, delegateeNames, anchorX, anchorY, onDismiss }: Props) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
@@ -107,7 +110,7 @@ export default function AgentHoverCard({ agent, run, queueDepth, anchorX, anchor
         )}
         {run?.runStatus && (
           <span className={`rounded bg-white/5 px-1.5 py-0.5 ${statusColor(run.runStatus)}`}>
-            {run.runStatus}
+            {activeDelegations && activeDelegations > 0 && run.runStatus === "running" ? "delegating" : run.runStatus}
           </span>
         )}
       </div>
@@ -134,6 +137,17 @@ export default function AgentHoverCard({ agent, run, queueDepth, anchorX, anchor
               className={`h-full transition-all ${ctxWarn ? "bg-amber-400" : "bg-emerald-400"}`}
               style={{ width: `${Math.max(2, ctxPct)}%` }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Delegation status */}
+      {activeDelegations != null && activeDelegations > 0 && (
+        <div className="mt-1.5">
+          <div className="font-mono text-[9px] uppercase tracking-wider text-purple-300/70">
+            delegating{delegateeNames && delegateeNames.length > 0
+              ? ` to ${delegateeNames.join(", ")}`
+              : ` (${activeDelegations})`}
           </div>
         </div>
       )}

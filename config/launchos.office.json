@@ -33,40 +33,17 @@
   },
   "agents": [
     {
-      "id": "thing1",
-      "deskId": "desk-thing1",
-      "name": "Thing 1",
-      "role": "Business Agent — Launch OS",
-      "spritePack": "limezu/office/auto",
-      "visual": {
-        "premade": "premade_04.png"
-      },
-      "isReal": true,
-      "isHead": true,
-      "cwd": "agent-workspaces/operations/thing1",
-      "allowedTools": [
-        "Read",
-        "Edit",
-        "Write",
-        "Grep",
-        "Glob",
-        "Bash",
-        "WebSearch",
-        "WebFetch"
-      ],
-      "model": "claude-opus-4-6"
-    },
-    {
       "id": "arch",
       "deskId": "desk-arch",
       "name": "Arch",
       "role": "Launch OS Tech Lead",
+      "personality": "Elderly business woman. Seasoned, no-nonsense, runs the room with quiet authority.",
       "spritePack": "limezu/office/auto",
       "visual": {
-        "premade": "premade_06.png"
+        "premade": "premade_Arch.png"
       },
       "isReal": true,
-      "isHead": false,
+      "isHead": true,
       "cwd": "agent-workspaces/operations/arch",
       "allowedTools": [
         "Read",
@@ -178,13 +155,6 @@
     }
   ],
   "desks": [
-    {
-      "id": "desk-thing1",
-      "roomId": "control",
-      "gridX": 0,
-      "gridY": 2,
-      "facing": "S"
-    },
     {
       "id": "desk-arch",
       "roomId": "control",
