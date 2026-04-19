@@ -1,0 +1,8 @@
+{
+  "slug": "my-station",
+  "name": "My Station",
+  "modules": [
+    { "office": "example", "offsetX": 0, "offsetY": 0, "accent": "#5aa0ff" }
+  ],
+  "background": { "kind": "starfield", "seed": 1, "density": 0.0008 }
+}

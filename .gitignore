@@ -39,10 +39,17 @@ yarn-error.log*
 
 # runtime data
 /data/
-/agent-workspaces/**
-!/agent-workspaces/**/
-!/agent-workspaces/**/CLAUDE.md
-!/agent-workspaces/**/MEMORY.md
+
+# agent workspaces — only ship the example
+/agent-workspaces/*
+!/agent-workspaces/example/
+
+# office configs — only ship the example
+/config/*.office.json
+!/config/example.office.json
+
+# station config — ship default, user creates their own
+/config/station.json
 
 # local agent + skill state
 /.claude/

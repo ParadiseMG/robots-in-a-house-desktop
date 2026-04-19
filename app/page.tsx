@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import stationRaw from "@/config/station.json";
 import type {
   OfficeConfig,
   StationConfig,
@@ -26,19 +25,29 @@ import WelcomePrompt from "@/components/health/WelcomePrompt";
 import { useAmbientStream } from "@/hooks/useAmbientStream";
 import confetti from "canvas-confetti";
 
-const stationBase = stationRaw as StationConfig;
+const DEFAULT_STATION: StationConfig = {
+  slug: "my-station",
+  name: "My Station",
+  modules: [],
+  background: { kind: "starfield", seed: 1, density: 0.0008 },
+};
 
-/** Build a station config that includes all loaded offices. */
-function buildStation(slugs: string[], offices: Record<string, OfficeConfig>): StationConfig {
-  // Start with modules from the static station.json for known offices
+/** Build a station config dynamically from loaded offices + optional station.json overrides. */
+function buildStation(
+  slugs: string[],
+  offices: Record<string, OfficeConfig>,
+  stationOverride?: StationConfig | null,
+): StationConfig {
+  const base = stationOverride ?? DEFAULT_STATION;
+
+  // Start with modules from station.json that still exist on disk
   const existingModules = new Map(
-    stationBase.modules.map((m) => [m.office, m]),
+    base.modules.map((m) => [m.office, m]),
   );
-
-  // Add any new offices that aren't in station.json
-  const modules = [...stationBase.modules.filter((m) => slugs.includes(m.office))];
+  const modules = [...base.modules.filter((m) => slugs.includes(m.office))];
   let nextX = modules.reduce((max, m) => Math.max(max, m.offsetX + 800), 0);
 
+  // Add any offices that aren't in the base config
   for (const slug of slugs) {
     if (existingModules.has(slug)) continue;
     modules.push({
@@ -50,7 +59,7 @@ function buildStation(slugs: string[], offices: Record<string, OfficeConfig>): S
     nextX += 800;
   }
 
-  return { ...stationBase, modules };
+  return { ...base, modules };
 }
 
 const ROSTER_POLL_MS = 5_000;
@@ -105,15 +114,15 @@ function HomeInner() {
   const [offices, setOffices] = useState<Record<string, OfficeConfig>>({});
   const [order, setOrder] = useState<string[]>([]);
   const [officesLoaded, setOfficesLoaded] = useState(false);
-  const [station, setStation] = useState<StationConfig>(stationBase);
+  const [station, setStation] = useState<StationConfig>(DEFAULT_STATION);
 
   useEffect(() => {
     fetch("/api/offices")
       .then((r) => r.json())
-      .then((data: { offices: Record<string, OfficeConfig>; slugs: string[] }) => {
+      .then((data: { offices: Record<string, OfficeConfig>; slugs: string[]; station?: StationConfig | null }) => {
         setOffices(data.offices);
         setOrder(data.slugs);
-        setStation(buildStation(data.slugs, data.offices));
+        setStation(buildStation(data.slugs, data.offices, data.station));
         setOfficesLoaded(true);
         // Redirect to setup if no offices exist
         if (data.slugs.length === 0) {
