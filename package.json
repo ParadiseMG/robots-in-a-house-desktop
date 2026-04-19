@@ -2,19 +2,24 @@
   "name": "robots-in-a-house",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently -n next,runner -c cyan,magenta \"next dev\" \"tsx watch --ignore 'config/**/*.json' --ignore 'data/**/*' --ignore 'agent-workspaces/**/*' server/agent-runner.ts\"",
     "dev:next": "next dev",
     "dev:runner": "tsx watch --ignore 'config/**/*.json' --ignore 'data/**/*' --ignore 'agent-workspaces/**/*' server/agent-runner.ts",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "electron:build-main": "node electron/build-main.mjs",
+    "electron:dev": "npm run build && npm run electron:build-main && electron electron/main.js",
+    "electron:dist": "npm run build && npm run electron:build-main && electron-builder"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.108",
     "better-sqlite3": "^12.9.0",
     "cmdk": "^1.1.1",
     "concurrently": "^9.2.1",
+    "electron-updater": "^6.8.3",
     "next": "16.2.3",
     "pixi-filters": "^6.1.5",
     "pixi.js": "^8.18.1",
@@ -23,14 +28,71 @@
     "tsx": "^4.21.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^41.2.1",
+    "electron-builder": "^26.8.1",
+    "esbuild": "^0.28.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.3",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "build": {
+    "appId": "com.paradise.robots-in-a-house",
+    "productName": "Robots in a House",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      ".next/**/*",
+      "electron/**/*.js",
+      "electron/**/*.html",
+      "build/icon.png",
+      "server/**/*",
+      "config/**/*",
+      "public/**/*",
+      "lib/**/*",
+      "data/**/*",
+      "node_modules/**/*",
+      "package.json",
+      "next.config.ts"
+    ],
+    "asar": false,
+    "publish": {
+      "provider": "github",
+      "owner": "ParadiseMG",
+      "repo": "robots-in-a-house-desktop"
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns"
+    },
+    "dmg": {
+      "background": "build/background.png",
+      "icon": "build/icon.icns",
+      "iconSize": 128,
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 200
+        },
+        {
+          "x": 400,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
   }
 }

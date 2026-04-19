@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db, getAgent, getResumeSessionId, agentIsBusy } from "@/server/db";
 
-const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:3100";
+const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:3101";
 
 const BREAK_PROMPT = `It's break time. Before we wrap this session:
 

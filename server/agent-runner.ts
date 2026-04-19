@@ -32,7 +32,7 @@ import {
   isValidOfficeSlug,
 } from "../lib/agent-builder.js";
 
-const PORT = Number(process.env.RUNNER_PORT) || 3100;
+const PORT = Number(process.env.RUNNER_PORT) || 3101;
 const ROOT = process.cwd();
 const CHANGELOG_PATH = join(ROOT, "data", "changelog.jsonl");
 
@@ -943,6 +943,15 @@ mkdirSync(LOG_DIR, { recursive: true });
     console.log(`[runner] marked ${zombies.changes} run(s) as interrupted from previous process`);
   }
 }
+
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`[runner] FATAL: port ${PORT} is already in use. Another runner may be running.`);
+    console.error(`[runner] Set RUNNER_PORT env var to use a different port.`);
+    process.exit(1);
+  }
+  throw err;
+});
 
 server.listen(PORT, () => {
   console.log(`[runner] listening on :${PORT}`);

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db, getAgent, agentIsBusy, enqueuePrompt } from "@/server/db";
 
-const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:3100";
+const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:3101";
 
 export async function POST(req: Request) {
   const body = (await req.json()) as {
@@ -50,19 +50,26 @@ export async function POST(req: Request) {
   tx();
 
   let runId: string | null = null;
+  let runnerError: string | null = null;
   if (agent.isReal) {
     try {
       const res = await fetch(`${RUNNER_URL}/runs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ assignmentId, agentId, officeSlug, prompt }),
+        signal: AbortSignal.timeout(5000),
       });
       if (res.ok) {
         const j = (await res.json()) as { runId: string };
         runId = j.runId;
+      } else {
+        runnerError = `Runner returned ${res.status}: ${await res.text().catch(() => "unknown")}`;
       }
-    } catch {
-      // assignment still exists even if runner is down
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      runnerError = msg.includes("ECONNREFUSED") || msg.includes("fetch failed")
+        ? `Agent runner unreachable at ${RUNNER_URL}. Is it running?`
+        : `Runner error: ${msg}`;
     }
   }
 
@@ -73,5 +80,6 @@ export async function POST(req: Request) {
     deskId: agent.deskId,
     runId,
     isReal: agent.isReal,
+    runnerError,
   });
 }

@@ -3,7 +3,7 @@ import { db, getAgent } from "@/server/db";
 
 export const dynamic = "force-dynamic";
 
-const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:3100";
+const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:3101";
 
 const SETTLED = new Set(["done", "error"]);
 
