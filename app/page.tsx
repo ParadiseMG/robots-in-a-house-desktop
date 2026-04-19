@@ -681,6 +681,21 @@ function HomeInner() {
     [bubble, agentByDesk, selectDesk, refetchRoster],
   );
 
+  const handleToolApproval = useCallback(
+    async (approvalId: string, action: "approve" | "deny", reason?: string) => {
+      try {
+        await fetch(`/api/tool-approvals/${encodeURIComponent(approvalId)}/resolve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, reason }),
+        });
+      } catch (error) {
+        console.error("Failed to resolve tool approval:", error);
+      }
+    },
+    [],
+  );
+
   const handleAgentMove = useCallback(
     async (
       officeSlug: string,
@@ -888,6 +903,7 @@ function HomeInner() {
                     label: agentConfig.name,
                   });
                 }}
+                onToolApproval={handleToolApproval}
               />
               <ErrorLog
                 officeNames={officeNameMap}
