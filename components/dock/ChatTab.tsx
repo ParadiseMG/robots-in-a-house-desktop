@@ -250,6 +250,26 @@ export default function ChatTab({
 
   const onNewChat = async () => {
     if (resetting || isLive) return;
+
+    // Check for unpushed commits before resetting
+    try {
+      const gitRes = await fetch("/api/git-status", { cache: "no-store" });
+      if (gitRes.ok) {
+        const { unpushed, uncommitted } = await gitRes.json() as { unpushed: number; uncommitted: number };
+        if (unpushed > 0 || uncommitted > 0) {
+          const parts: string[] = [];
+          if (uncommitted > 0) parts.push(`${uncommitted} uncommitted change${uncommitted !== 1 ? "s" : ""}`);
+          if (unpushed > 0) parts.push(`${unpushed} unpushed commit${unpushed !== 1 ? "s" : ""}`);
+          const ok = window.confirm(
+            `Warning: You have ${parts.join(" and ")}.\n\nContinue with new chat anyway?`
+          );
+          if (!ok) return;
+        }
+      }
+    } catch {
+      // If git check fails, proceed anyway
+    }
+
     setResetting(true);
     try {
       const res = await fetch("/api/break", {
