@@ -31,6 +31,10 @@ type Props = {
   focusedModule: string | null;
   busyDeskIds?: ReadonlySet<string>;
   agentStatus?: ReadonlyMap<string, IndicatorKind>;
+  /** deskId → count of active delegated child runs (renders orbiting satellite dots). */
+  delegationsByDesk?: ReadonlyMap<string, number>;
+  /** Active delegation pairs for beam lines: fromDeskId → toDeskId */
+  delegationLinks?: ReadonlyArray<{ fromDeskId: string; toDeskId: string }>;
   selectedDeskId?: string | null;
   onDeskSelect?: (deskId: string | null) => void;
   onAgentClick?: (
@@ -72,6 +76,8 @@ export default function Station({
   focusedModule,
   busyDeskIds,
   agentStatus,
+  delegationsByDesk,
+  delegationLinks,
   selectedDeskId,
   onDeskSelect,
   onAgentClick,
@@ -118,6 +124,14 @@ export default function Station({
   const statusRef = useRef<ReadonlyMap<string, IndicatorKind>>(
     agentStatus ?? new Map(),
   );
+  const delegationsRef = useRef<ReadonlyMap<string, number>>(
+    delegationsByDesk ?? new Map(),
+  );
+  delegationsRef.current = delegationsByDesk ?? new Map();
+  const delegationLinksRef = useRef<ReadonlyArray<{ fromDeskId: string; toDeskId: string }>>(
+    delegationLinks ?? [],
+  );
+  delegationLinksRef.current = delegationLinks ?? [];
   statusRef.current = agentStatus ?? new Map();
 
   // Shared geom for HTML5 drag-drop hit-testing across all modules.
@@ -245,17 +259,38 @@ export default function Station({
         nameTag: InstanceType<typeof Container>;
         shadow: InstanceType<typeof Graphics>;
         deskGlow: InstanceType<typeof Graphics>;
+        satellites: InstanceType<typeof Graphics>;
+        lastSatCount: number;
         indicatorBaseY: number;
         agentId: string;
         model: string | null;
         restX: number;
         restY: number;
         lastKind: string | undefined;
-        anim: { type: "none" | "bounce" | "shake"; t: number };
+        anim: { type: "none" | "bounce" | "shake" | "slump"; t: number };
         allFrames: PremadeFrames["frames"];
         idleFacing: "N" | "E" | "S" | "W";
         wanderTimer: number;
-        wanderTarget: { x: number; y: number; dir: "N" | "E" | "S" | "W"; returning: boolean } | null;
+        wanderTarget: { x: number; y: number; dir: "N" | "E" | "S" | "W"; returning: boolean; pause?: number; legsLeft?: number } | null;
+        pendingKind: string | undefined;
+        breathPhase: number;
+        particles: Array<{ x: number; y: number; vx: number; vy: number; life: number; maxLife: number; color: number; kind: "star" | "sweat" }>;
+        particleGraphics: InstanceType<typeof Graphics>;
+        baseScaleX: number;
+        baseScaleY: number;
+        workingFacing: "N" | "E" | "S" | "W";
+        typingDots: InstanceType<typeof Graphics>;
+        isWorking: boolean;
+        officeSlug: string;
+        isHead: boolean;
+        sunglasses: InstanceType<typeof Graphics> | null;
+        zzzGraphics: InstanceType<typeof Graphics>;
+        zzzPhase: number;
+        emoteGraphics: InstanceType<typeof Graphics>;
+        emoteTimer: number;
+        chairSprite: InstanceType<typeof Container> | InstanceType<typeof Graphics> | null;
+        monitorSprite: InstanceType<typeof Container> | null;
+        lastRunTs: number;
       };
 
       // Shared drag state — at most one agent dragging at a time across modules.
@@ -373,8 +408,8 @@ export default function Station({
 
         // Preload character sheets for this module
         const premadePaths = office.agents
-          .map((a) => `/sprites/characters/${a.visual.premade}`)
-          .filter(Boolean);
+          .map((a) => a.visual?.premade ? `/sprites/characters/${a.visual.premade}` : null)
+          .filter(Boolean) as string[];
         await preloadPremades(premadePaths);
 
         const premadeRoomConfig = office.theme.premadeRoom;
@@ -384,6 +419,16 @@ export default function Station({
           tilesheet = await loadTilesheet(
             `/sprites/interiors/${interiorConfig.tilesheet}`,
             interiorConfig.tileSize,
+          );
+        }
+
+        // Desk furniture tilesheet — chairs and monitors
+        const deskStyleCfg = office.theme.deskStyle;
+        let deskTilesheet: Awaited<ReturnType<typeof loadTilesheet>> | null = null;
+        if (deskStyleCfg) {
+          deskTilesheet = await loadTilesheet(
+            `/sprites/interiors/${deskStyleCfg.tilesheet}`,
+            16,
           );
         }
 
@@ -433,6 +478,7 @@ export default function Station({
         const floor = new Container();
         const furniture = new Container();
         const roomFg = new Container();
+        roomFg.eventMode = "none"; // foreground layers must not block agent clicks
         const gridOverlay = new Container();
         gridOverlay.visible = showGridRef.current;
         moduleContainer.addChild(roomBg, floor, furniture, roomFg, gridOverlay);
@@ -585,6 +631,7 @@ export default function Station({
         const moduleHandleForBody = {} as ModuleHandle; // forward-declared so pointerdown closures capture it
 
         for (const agent of office.agents) {
+          if (!agent.visual?.premade) continue; // skip agents with no sprite
           const desk = office.desks.find((d) => d.id === agent.deskId);
           if (!desk) continue;
 
@@ -605,13 +652,12 @@ export default function Station({
           body.anchor.set(0.5, 1.0);
           const charScale = tw / 16;
           body.scale.set(charScale);
+          const baseScaleX = charScale;
+          const baseScaleY = charScale;
           body.position.set(agentCenterX, agentBottomY);
           const zBase = desk.gridY * office.grid.cols + desk.gridX;
           body.zIndex = zBase + 3;
           body.eventMode = "static";
-          // Tight hit region — local coords with anchor(0.5, 1.0): origin = bottom-center.
-          // LimeZu frames are 16×32px; character art fills roughly the lower 26px, ±6px wide.
-          body.hitArea = new Rectangle(-6, -26, 12, 26);
           body.cursor = "pointer";
           const deskId = desk.id;
           const officeSlug = office.slug;
@@ -651,7 +697,117 @@ export default function Station({
           body.on("pointerout", () => {
             onAgentHoverOutRef.current?.();
           });
+          // ZZZ sleep graphics — shown when agent has been idle 1+ day
+          const zzzGraphics = new Graphics();
+          zzzGraphics.zIndex = zBase + 8;
+          zzzGraphics.visible = false;
+          furniture.addChild(zzzGraphics);
+
+          // Emote graphics — small bubble during social encounters
+          const emoteGraphics = new Graphics();
+          emoteGraphics.zIndex = zBase + 9;
+          emoteGraphics.visible = false;
+          furniture.addChild(emoteGraphics);
+
+          // Desk furniture sprites — chair/towel behind agent, monitor in front
+          let chairRef: InstanceType<typeof Container> | InstanceType<typeof Graphics> | null = null;
+          let monRef: InstanceType<typeof Container> | null = null;
+          if (deskTilesheet && deskStyleCfg) {
+            const { chair, monitor } = deskStyleCfg;
+            const tileScale = tw / 16;
+            const chairType = deskStyleCfg.chairType ?? "tile";
+            const headScale = agent.isHead ? 1.3 : 1.0;
+
+            if (chairType === "towel") {
+              // Beach towel — drawn with Graphics, striped pattern
+              const towel = new Graphics();
+              const baseColor = deskStyleCfg.towelColor
+                ? parseInt(deskStyleCfg.towelColor.replace("#", ""), 16)
+                : 0xf59e0b;
+              // Darken helper: shift each channel down ~30%
+              const darken = (c: number) => {
+                const r = Math.floor(((c >> 16) & 0xff) * 0.65);
+                const g = Math.floor(((c >> 8) & 0xff) * 0.65);
+                const b = Math.floor((c & 0xff) * 0.65);
+                return (r << 16) | (g << 8) | b;
+              };
+              const stripe = darken(baseColor);
+              const towelW = 28; // px before scaling
+              const towelH = 18;
+              // Base towel shape
+              towel.roundRect(-towelW / 2, -towelH / 2, towelW, towelH, 2)
+                .fill({ color: baseColor, alpha: 0.9 });
+              // Horizontal stripes
+              for (let sy = 0; sy < 3; sy++) {
+                const stripeY = -towelH / 2 + 3 + sy * 5;
+                towel.rect(-towelW / 2 + 2, stripeY, towelW - 4, 2)
+                  .fill({ color: stripe, alpha: 0.5 });
+              }
+              // White fringe at short edges
+              towel.rect(-towelW / 2, -towelH / 2, 2, towelH)
+                .fill({ color: 0xffffff, alpha: 0.3 });
+              towel.rect(towelW / 2 - 2, -towelH / 2, 2, towelH)
+                .fill({ color: 0xffffff, alpha: 0.3 });
+              // Subtle shadow/border
+              towel.roundRect(-towelW / 2, -towelH / 2, towelW, towelH, 2)
+                .stroke({ color: 0x000000, alpha: 0.15, width: 0.5 });
+              towel.scale.set(tileScale * headScale);
+              towel.position.set(agentCenterX, agentBottomY - th * 0.25);
+              towel.zIndex = zBase + 1; // below agent
+              furniture.addChild(towel);
+              chairRef = towel;
+            } else {
+              // Chair — 2x2 tile block, centered on desk cell, behind agent
+              const chairContainer = new Container();
+              for (let dy = 0; dy < 2; dy++) {
+                for (let dx = 0; dx < 2; dx++) {
+                  const tex = deskTilesheet.getTile(chair[0] + dx, chair[1] + dy);
+                  tex.source.scaleMode = "nearest";
+                  const tile = new Sprite(tex);
+                  tile.x = dx * 16;
+                  tile.y = dy * 16;
+                  chairContainer.addChild(tile);
+                }
+              }
+              chairContainer.pivot.set(16, 16);
+              chairContainer.scale.set(tileScale * headScale);
+              chairContainer.position.set(agentCenterX, agentBottomY - th * 0.25);
+              chairContainer.zIndex = zBase + 2; // below body (zBase+3)
+              furniture.addChild(chairContainer);
+              chairRef = chairContainer;
+            }
+
+            // Monitor — 2x1 tile block, offset in desk facing direction (skip for towel mode)
+            if (chairType !== "towel") {
+              const monContainer = new Container();
+              for (let dx = 0; dx < 2; dx++) {
+                const tex = deskTilesheet.getTile(monitor[0] + dx, monitor[1]);
+                tex.source.scaleMode = "nearest";
+                const tile = new Sprite(tex);
+                tile.x = dx * 16;
+                tile.y = 0;
+                monContainer.addChild(tile);
+              }
+              monContainer.pivot.set(16, 8);
+              monContainer.scale.set(tileScale * headScale);
+              const monOffset = tw * 0.8;
+              const facing = desk.facing;
+              const monX = agentCenterX + (facing === "E" ? monOffset : facing === "W" ? -monOffset : 0);
+              const monY = (agentBottomY - th * 0.25) + (facing === "S" ? monOffset : facing === "N" ? -monOffset : 0);
+              monContainer.position.set(monX, monY);
+              monContainer.zIndex = zBase + 2;
+              furniture.addChild(monContainer);
+              monRef = monContainer;
+            }
+          }
+
           furniture.addChild(body);
+
+          // Particle graphics — renders particle bursts in the same container as body
+          const particleGraphics = new Graphics();
+          particleGraphics.zIndex = zBase + 9;
+          particleGraphics.visible = false;
+          furniture.addChild(particleGraphics);
 
           const indicatorBaseY = agentBottomY - body.height - 14;
           const pip = new Graphics();
@@ -727,6 +883,24 @@ export default function Station({
           deskGlow.zIndex = zBase;
           furniture.addChild(deskGlow);
 
+          // Satellites — orbiting dots around the agent showing active delegated child runs
+          const satellites = new Graphics();
+          satellites.position.set(agentCenterX, agentBottomY - body.height / 2);
+          satellites.zIndex = zBase + 7;
+          satellites.visible = false;
+          furniture.addChild(satellites);
+
+          // Working facing = opposite of desk facing (agent turns to face the desk)
+          const oppFacing = (f: "N" | "E" | "S" | "W"): "N" | "E" | "S" | "W" =>
+            f === "N" ? "S" : f === "S" ? "N" : f === "E" ? "W" : "E";
+          const workingFacing = oppFacing(desk.facing);
+
+          // Typing dots — animated indicator shown while agent is working
+          const typingDots = new Graphics();
+          typingDots.zIndex = zBase + 8;
+          typingDots.visible = false;
+          furniture.addChild(typingDots);
+
           agentSprites.set(agent.id, {
             body,
             pip,
@@ -736,6 +910,8 @@ export default function Station({
             nameTag,
             shadow,
             deskGlow,
+            satellites,
+            lastSatCount: 0,
             indicatorBaseY,
             agentId: agent.id,
             model: agent.model ?? null,
@@ -747,6 +923,25 @@ export default function Station({
             idleFacing: desk.facing,
             wanderTimer: 2 + Math.random() * 6,
             wanderTarget: null,
+            pendingKind: undefined,
+            breathPhase: Math.random() * Math.PI * 2,
+            particles: [],
+            particleGraphics,
+            baseScaleX,
+            baseScaleY,
+            workingFacing,
+            typingDots,
+            isWorking: false,
+            officeSlug,
+            isHead: agent.isHead ?? false,
+            sunglasses: null,
+            zzzGraphics,
+            zzzPhase: Math.random() * Math.PI * 2,
+            emoteGraphics,
+            emoteTimer: 0,
+            chairSprite: chairRef,
+            monitorSprite: monRef,
+            lastRunTs: Date.now(),
           });
         }
 
@@ -792,7 +987,7 @@ export default function Station({
         // Module background click: focus this module + deselect desk
         moduleContainer.on("pointertap", (ev) => {
           if (ev.button !== 0) return;
-          if (ev.target === moduleContainer || ev.target === roomBg || ev.target === roomFg) {
+          if (ev.target === moduleContainer || ev.target === roomBg) {
             onModuleFocusRef.current?.(office.slug);
           }
         });
@@ -820,6 +1015,10 @@ export default function Station({
         (moduleHandleForBody as ModuleHandle & { ghost: InstanceType<typeof Graphics> }).ghost = ghost;
         modules.push(handle);
       }
+
+      // ── Beam overlay — drawn above all module furniture, in world space ──
+      const beamOverlay = new Graphics();
+      world.addChild(beamOverlay);
 
       // ── Camera: compute target transform ────────────────────────────────
       const cameraTarget = { x: 0, y: 0, scale: 1 };
@@ -957,6 +1156,21 @@ export default function Station({
                 localPos.y - drag.body.height - 46,
               );
               sprites.shadow.position.set(localPos.x, localPos.y - 2);
+              // Desk furniture follows during drag
+              const mth = drag.module.th;
+              const mtw = drag.module.tw;
+              if (sprites.chairSprite) {
+                sprites.chairSprite.position.set(localPos.x, localPos.y - mth * 0.25);
+              }
+              if (sprites.monitorSprite) {
+                const dragNow = drag;
+                const deskCfg = dragNow?.module.office.desks.find((dd) => dd.id === dragNow?.deskId);
+                const facing = deskCfg?.facing ?? "S";
+                const monOffset = mtw * 0.8;
+                const monX = localPos.x + (facing === "E" ? monOffset : facing === "W" ? -monOffset : 0);
+                const monY = (localPos.y - mth * 0.25) + (facing === "S" ? monOffset : facing === "N" ? -monOffset : 0);
+                sprites.monitorSprite.position.set(monX, monY);
+              }
             }
           }
           const snapGX = Math.floor(localPos.x / drag.module.tw);
@@ -1039,6 +1253,20 @@ export default function Station({
           d.body.position.set(d.origX, d.origY);
           repositionNameTag(d.module, d.deskId, d.origX, d.origY, d.body.height);
           d.body.cursor = "pointer";
+          // Snap desk furniture back
+          const spSnap = d.module.agentSprites.get(d.module.deskOfAgent.get(d.deskId) ?? "");
+          if (spSnap) {
+            if (spSnap.chairSprite) spSnap.chairSprite.position.set(d.origX, d.origY - d.module.th * 0.25);
+            if (spSnap.monitorSprite) {
+              const deskCfgSnap = d.module.office.desks.find((dd) => dd.id === d.deskId);
+              const facingSnap = deskCfgSnap?.facing ?? "S";
+              const moSnap = d.module.tw * 0.8;
+              spSnap.monitorSprite.position.set(
+                d.origX + (facingSnap === "E" ? moSnap : facingSnap === "W" ? -moSnap : 0),
+                (d.origY - d.module.th * 0.25) + (facingSnap === "S" ? moSnap : facingSnap === "N" ? -moSnap : 0),
+              );
+            }
+          }
           return;
         }
 
@@ -1062,6 +1290,20 @@ export default function Station({
           d.body.position.set(d.origX, d.origY);
           repositionNameTag(d.module, d.deskId, d.origX, d.origY, d.body.height);
           d.body.cursor = "pointer";
+          // Snap desk furniture back
+          const spOob = d.module.agentSprites.get(d.module.deskOfAgent.get(d.deskId) ?? "");
+          if (spOob) {
+            if (spOob.chairSprite) spOob.chairSprite.position.set(d.origX, d.origY - d.module.th * 0.25);
+            if (spOob.monitorSprite) {
+              const deskCfgOob = d.module.office.desks.find((dd) => dd.id === d.deskId);
+              const facingOob = deskCfgOob?.facing ?? "S";
+              const moOob = d.module.tw * 0.8;
+              spOob.monitorSprite.position.set(
+                d.origX + (facingOob === "E" ? moOob : facingOob === "W" ? -moOob : 0),
+                (d.origY - d.module.th * 0.25) + (facingOob === "S" ? moOob : facingOob === "N" ? -moOob : 0),
+              );
+            }
+          }
           return;
         }
         const newX = snapGX * d.module.tw + d.module.tw / 2;
@@ -1073,6 +1315,19 @@ export default function Station({
         if (live) {
           live.gridX = snapGX;
           live.gridY = snapGY;
+        }
+        // Update desk furniture to new position
+        const spNew = d.module.agentSprites.get(d.module.deskOfAgent.get(d.deskId) ?? "");
+        if (spNew) {
+          if (spNew.chairSprite) spNew.chairSprite.position.set(newX, newY - d.module.th * 0.25);
+          if (spNew.monitorSprite) {
+            const newFacing = live?.facing ?? "S";
+            const moNew = d.module.tw * 0.8;
+            spNew.monitorSprite.position.set(
+              newX + (newFacing === "E" ? moNew : newFacing === "W" ? -moNew : 0),
+              (newY - d.module.th * 0.25) + (newFacing === "S" ? moNew : newFacing === "N" ? -moNew : 0),
+            );
+          }
         }
         onAgentMoveRef.current?.(d.officeSlug, d.deskId, snapGX, snapGY);
       };
@@ -1115,6 +1370,8 @@ export default function Station({
       let lastStatusSig = "";
       let bobPhase = 0;
       let bloomPhase = 0;
+      let orbitPhase = 0;
+      let typingPhase = 0;
 
       const computeBusySig = () =>
         Array.from(busyRef.current).sort().join(",");
@@ -1197,26 +1454,99 @@ export default function Station({
                 sprites.deskGlow.circle(0, 0, glowR).fill({ color: 0x22C55E, alpha: 0.15 });
               }
               if (kind !== sprites.lastKind) {
-                // Cancel any active wander so the agent snaps to attention
+                // Walk back to desk instead of snapping (if wandering away)
+                const atDesk = Math.abs(sprites.body.x - sprites.restX) < 3 && Math.abs(sprites.body.y - sprites.restY) < 3;
+                if (!atDesk && sprites.wanderTarget) {
+                  // Redirect wander to head home — status anim will trigger once they arrive
+                  const wdx = sprites.restX - sprites.body.x;
+                  const wdy = sprites.restY - sprites.body.y;
+                  const wdir: "N"|"E"|"S"|"W" = Math.abs(wdx) > Math.abs(wdy) ? (wdx > 0 ? "E" : "W") : (wdy > 0 ? "S" : "N");
+                  sprites.wanderTarget = { x: sprites.restX, y: sprites.restY, dir: wdir, returning: true };
+                  sprites.body.textures = sprites.allFrames[`walk${wdir}`];
+                  sprites.body.animationSpeed = 0.18; // hurry back
+                  sprites.body.play();
+                  // Store pending status so it triggers on arrival
+                  sprites.pendingKind = kind;
+                  sprites.lastKind = kind;
+                  continue;
+                }
                 if (sprites.wanderTarget) {
                   sprites.wanderTarget = null;
-                  sprites.body.x = sprites.restX;
-                  sprites.body.y = sprites.restY;
-                  sprites.shadow.position.set(sprites.restX, sprites.restY - 2);
-                  sprites.nameTag.position.set(sprites.restX, sprites.restY - sprites.body.height - 46);
-                  sprites.body.textures = idleFramesForFacing(sprites.allFrames, sprites.idleFacing);
-                  sprites.body.animationSpeed = 0.08;
-                  sprites.body.play();
                   sprites.wanderTimer = 5 + Math.random() * 8;
                 }
-                if (kind === "done_unacked") sprites.anim = { type: "bounce", t: 0 };
-                else if (kind === "awaiting_input") sprites.anim = { type: "shake", t: 0 };
-                else {
+                if (kind === "done_unacked") {
+                  sprites.anim = { type: "bounce", t: 0 };
+                  // Spawn star particle burst
+                  const starColors = [0x10b981, 0xfacc15, 0xfbbf24];
+                  const count = 6 + Math.floor(Math.random() * 3);
+                  for (let i = 0; i < count; i++) {
+                    sprites.particles.push({
+                      x: sprites.body.x,
+                      y: sprites.body.y - sprites.body.height / 2,
+                      vx: (Math.random() - 0.5) * 3,
+                      vy: -(2 + Math.random() * 2),
+                      life: 0,
+                      maxLife: 0.8 + Math.random() * 0.4,
+                      color: starColors[Math.floor(Math.random() * starColors.length)],
+                      kind: "star",
+                    });
+                  }
+                } else if (kind === "awaiting_input") {
+                  sprites.anim = { type: "shake", t: 0 };
+                } else if (kind === "error") {
+                  sprites.anim = { type: "slump", t: 0 };
+                  // Spawn sweat-drop particles
+                  for (let i = 0; i < 2; i++) {
+                    sprites.particles.push({
+                      x: sprites.body.x + sprites.body.width * 0.3,
+                      y: sprites.body.y - sprites.body.height * 0.8 + i * 8,
+                      vx: 0.3 + Math.random() * 0.3,
+                      vy: 0.5 + Math.random() * 0.5,
+                      life: 0,
+                      maxLife: 0.6 + Math.random() * 0.3,
+                      color: 0x60a5fa,
+                      kind: "sweat",
+                    });
+                  }
+                } else {
                   sprites.anim = { type: "none", t: 0 };
                   sprites.body.x = sprites.restX;
                   sprites.body.y = sprites.restY;
+                  sprites.body.scale.set(sprites.baseScaleX, sprites.baseScaleY);
+                  sprites.body.skew.set(0, 0);
                 }
                 sprites.lastKind = kind;
+              }
+              // Working pose: busy but no special status (not awaiting_input, not done_unacked, not error)
+              const shouldWork = busy && !kind;
+              if (shouldWork && !sprites.isWorking) {
+                const atDesk = Math.abs(sprites.body.x - sprites.restX) < 3 && Math.abs(sprites.body.y - sprites.restY) < 3;
+                if (!atDesk && sprites.wanderTarget) {
+                  // Walk back first, then enter working pose on arrival
+                  const wdx = sprites.restX - sprites.body.x;
+                  const wdy = sprites.restY - sprites.body.y;
+                  const wdir: "N"|"E"|"S"|"W" = Math.abs(wdx) > Math.abs(wdy) ? (wdx > 0 ? "E" : "W") : (wdy > 0 ? "S" : "N");
+                  sprites.wanderTarget = { x: sprites.restX, y: sprites.restY, dir: wdir, returning: true };
+                  sprites.body.textures = sprites.allFrames[`walk${wdir}`];
+                  sprites.body.animationSpeed = 0.18;
+                  sprites.body.play();
+                  sprites.pendingKind = "working";
+                  continue;
+                }
+                sprites.isWorking = true;
+                sprites.body.textures = idleFramesForFacing(sprites.allFrames, sprites.workingFacing);
+                sprites.body.animationSpeed = 0.04;
+                sprites.body.play();
+                sprites.typingDots.visible = true;
+                if (sprites.wanderTarget) {
+                  sprites.wanderTarget = null;
+                }
+              } else if (!shouldWork && sprites.isWorking) {
+                sprites.isWorking = false;
+                sprites.body.textures = idleFramesForFacing(sprites.allFrames, sprites.idleFacing);
+                sprites.body.animationSpeed = 0.08;
+                sprites.body.play();
+                sprites.typingDots.visible = false;
               }
               // Context warning overlay
               const ctxInfo = contextUsageRef.current?.get(agentId);
@@ -1224,6 +1554,64 @@ export default function Station({
                 ? isContextWarning(ctxInfo.model, ctxInfo.tokens)
                 : false;
             }
+          }
+        }
+
+        // Idle breathing — subtle Y bob when agent is standing still
+        for (const m of modules) {
+          for (const sprites of m.agentSprites.values()) {
+            if (sprites.anim.type !== "none") continue;  // status anim owns Y
+            if (sprites.wanderTarget) continue;          // walking owns Y
+            if (drag && drag.body === sprites.body) continue;
+            sprites.breathPhase += 0.03 * app.ticker.deltaTime;
+            const breathY = Math.sin(sprites.breathPhase) * 1.2;
+            sprites.body.y = sprites.restY + breathY;
+          }
+        }
+
+        // ZZZ sleep — agents with no activity for 1+ day show floating Z's
+        for (const m of modules) {
+          for (const sprites of m.agentSprites.values()) {
+            // Update lastRunTs when agent has any status
+            if (sprites.lastKind || sprites.isWorking) {
+              sprites.lastRunTs = Date.now();
+            }
+            const idleMs = Date.now() - sprites.lastRunTs;
+            const dayMs = 24 * 60 * 60 * 1000;
+            if (idleMs > dayMs && !sprites.isWorking && sprites.anim.type === "none") {
+              sprites.zzzGraphics.visible = true;
+              sprites.zzzPhase += 0.04 * app.ticker.deltaTime;
+              sprites.zzzGraphics.clear();
+              sprites.zzzGraphics.position.set(sprites.body.x, sprites.body.y);
+              // Draw 3 Z's at different sizes and heights, floating upward
+              for (let i = 0; i < 3; i++) {
+                const phase = sprites.zzzPhase + i * 1.2;
+                const floatY = -(sprites.body.height * 0.5 + 8 + i * 10 + Math.sin(phase) * 3);
+                const floatX = 6 + i * 3 + Math.sin(phase * 0.7) * 2;
+                const sz = 3 + i * 1.5;
+                const alpha = 0.4 + 0.3 * Math.sin(phase);
+                // Draw a Z shape
+                sprites.zzzGraphics
+                  .moveTo(floatX, floatY).lineTo(floatX + sz, floatY)
+                  .lineTo(floatX, floatY + sz).lineTo(floatX + sz, floatY + sz)
+                  .stroke({ color: 0xffffff, alpha, width: 1.2 });
+              }
+            } else {
+              if (sprites.zzzGraphics.visible) {
+                sprites.zzzGraphics.visible = false;
+                sprites.zzzGraphics.clear();
+              }
+            }
+          }
+        }
+
+        // Don't Call chair ambient glow — subtle pulsing edge glow on chairs
+        for (const m of modules) {
+          if (m.slug !== "dontcall") continue;
+          for (const sprites of m.agentSprites.values()) {
+            if (!sprites.chairSprite) continue;
+            const pulse = 0.08 + Math.sin(bobPhase * 0.5 + sprites.breathPhase) * 0.04;
+            (sprites.chairSprite as InstanceType<typeof Container>).alpha = 0.85 + pulse;
           }
         }
 
@@ -1241,7 +1629,139 @@ export default function Station({
           }
         }
 
-        // Agent status animations (bounce on done, shake on awaiting input)
+        // Typing dots animation — shown when agent is in working pose
+        typingPhase += 0.05 * app.ticker.deltaTime;
+        for (const m of modules) {
+          for (const sprites of m.agentSprites.values()) {
+            if (!sprites.typingDots.visible) continue;
+            sprites.typingDots.clear();
+            const offsetX = sprites.workingFacing === "E" ? 8 : sprites.workingFacing === "W" ? -8 : 0;
+            const offsetY = sprites.workingFacing === "N" ? -6 : sprites.workingFacing === "S" ? 6 : -2;
+            sprites.typingDots.position.set(sprites.body.x + offsetX, sprites.body.y + offsetY);
+            for (let i = 0; i < 3; i++) {
+              const phase = typingPhase + i * 0.7;
+              const pulse = 0.5 + 0.5 * Math.abs(Math.sin(phase));
+              const dotR = 1.2 * pulse;
+              const alpha = 0.4 + 0.6 * pulse;
+              sprites.typingDots.circle(i * 4 - 4, 0, dotR).fill({ color: 0xffffff, alpha });
+            }
+          }
+        }
+
+        // Delegation satellites — orbit dots around an agent for each active
+        // child run they delegated. Perspective-flattened oval, slow rotation.
+        orbitPhase += 0.012 * app.ticker.deltaTime;
+        for (const m of modules) {
+          for (const [deskId, agentId] of m.deskOfAgent) {
+            const sprites = m.agentSprites.get(agentId);
+            if (!sprites) continue;
+            const count = delegationsRef.current.get(deskId) ?? 0;
+            if (count === 0) {
+              if (sprites.satellites.visible) {
+                sprites.satellites.visible = false;
+                sprites.satellites.clear();
+              }
+              sprites.lastSatCount = 0;
+              continue;
+            }
+            sprites.satellites.visible = true;
+            // Follow body during wander
+            sprites.satellites.position.set(
+              sprites.body.x,
+              sprites.body.y - sprites.body.height / 2,
+            );
+            // Redraw each tick — cheap for count ≤ 6
+            sprites.satellites.clear();
+            const ringRx = 26;
+            const ringRy = 10; // flattened for top-down camera feel
+            for (let i = 0; i < count; i++) {
+              const angle = orbitPhase + (i * 2 * Math.PI) / count;
+              const dx = Math.cos(angle) * ringRx;
+              const dy = Math.sin(angle) * ringRy;
+              // Tiny shadow below the dot for depth
+              sprites.satellites
+                .ellipse(dx, dy + 2, 3, 1.2)
+                .fill({ color: 0x000000, alpha: 0.3 });
+              // Dot — subtle cyan, like a helper drone
+              sprites.satellites
+                .circle(dx, dy, 3)
+                .fill({ color: 0x67e8f9, alpha: 0.95 });
+              sprites.satellites
+                .circle(dx, dy, 3)
+                .stroke({ color: 0x0e7490, alpha: 0.7, width: 1 });
+            }
+            sprites.lastSatCount = count;
+          }
+        }
+
+        // Delegation beam lines — draw animated dashes from delegator to delegate
+        beamOverlay.clear();
+        const links = delegationLinksRef.current;
+        if (links.length > 0) {
+          // Build a flat map: deskId → world-space {x, y} for all agents
+          const deskWorldPos = new Map<string, { x: number; y: number }>();
+          for (const m of modules) {
+            for (const [deskId, agentId] of m.deskOfAgent) {
+              const sp = m.agentSprites.get(agentId);
+              if (!sp) continue;
+              // body position is in module-local furniture space; convert to world
+              const local = { x: sp.body.x, y: sp.body.y - sp.body.height / 2 };
+              const worldPos = m.container.toGlobal(local);
+              // world container is a child of stage — convert stage global → world local
+              const worldLocal = world.toLocal(worldPos);
+              deskWorldPos.set(deskId, worldLocal);
+            }
+          }
+          const dashLen = 6;
+          const gapLen = 5;
+          const dotR = 2.5;
+          const beamPhase = (orbitPhase * 2) % (dashLen + gapLen);
+
+          for (const link of links) {
+            const from = deskWorldPos.get(link.fromDeskId);
+            const to = deskWorldPos.get(link.toDeskId);
+            if (!from || !to) continue;
+            const dx = to.x - from.x;
+            const dy = to.y - from.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 1) continue;
+            const ux = dx / dist;
+            const uy = dy / dist;
+
+            // Glow backing line
+            beamOverlay
+              .moveTo(from.x, from.y)
+              .lineTo(to.x, to.y)
+              .stroke({ color: 0x67e8f9, alpha: 0.08, width: 6 });
+
+            // Animated dashes
+            let t = -beamPhase;
+            while (t < dist) {
+              const t0 = Math.max(0, t);
+              const t1 = Math.min(dist, t + dashLen);
+              if (t1 > t0) {
+                beamOverlay
+                  .moveTo(from.x + ux * t0, from.y + uy * t0)
+                  .lineTo(from.x + ux * t1, from.y + uy * t1)
+                  .stroke({ color: 0x67e8f9, alpha: 0.55, width: 1.5 });
+              }
+              t += dashLen + gapLen;
+            }
+
+            // Traveling dot along the beam
+            const dotT = ((orbitPhase * 40) % dist + dist) % dist;
+            beamOverlay
+              .circle(from.x + ux * dotT, from.y + uy * dotT, dotR)
+              .fill({ color: 0x67e8f9, alpha: 0.9 });
+
+            // Endpoint glow at delegate
+            beamOverlay
+              .circle(to.x, to.y, 5)
+              .fill({ color: 0x67e8f9, alpha: 0.15 });
+          }
+        }
+
+        // Agent status animations (bounce on done, shake on awaiting input, slump on error)
         for (const m of modules) {
           for (const sprites of m.agentSprites.values()) {
             const { anim } = sprites;
@@ -1250,69 +1770,217 @@ export default function Station({
             if (drag && drag.body === sprites.body) continue;
             anim.t += app.ticker.deltaTime / 60;
             if (anim.type === "bounce") {
-              // Loop: gentle hop every ~1s
-              const cycle = anim.t % 1.0;
-              const jumpH = Math.abs(Math.sin(cycle * Math.PI)) * 10;
+              // Squash-stretch hop, relative to baseScale
+              const cycle = anim.t % 0.8;
+              const jumpPhase = cycle / 0.8;
+              const jumpH = Math.abs(Math.sin(jumpPhase * Math.PI)) * 8;
               sprites.body.y = sprites.restY - jumpH;
+              if (jumpH < 1.5) {
+                // Landing squash
+                sprites.body.scale.x = sprites.baseScaleX * 1.12;
+                sprites.body.scale.y = sprites.baseScaleY * 0.88;
+              } else {
+                // In-air stretch
+                sprites.body.scale.x = sprites.baseScaleX * 0.95;
+                sprites.body.scale.y = sprites.baseScaleY * 1.05;
+              }
               // Shadow squishes as agent rises
-              const shadowT = 1 - jumpH / 10;
+              const shadowT = 1 - jumpH / 8;
               sprites.shadow.scale.set(0.6 + 0.4 * shadowT, 0.6 + 0.4 * shadowT);
               sprites.shadow.alpha = 0.1 + 0.18 * shadowT;
-            } else {
-              // Loop: rapid shake for 0.45s, then pause until 1.2s, repeat
-              const cycle = anim.t % 1.2;
-              if (cycle < 0.45) {
-                const decay = 1 - cycle / 0.45;
-                const shakeX = Math.sin(cycle * Math.PI * 16) * 5 * (0.4 + 0.6 * decay);
-                sprites.body.x = sprites.restX + shakeX;
+            } else if (anim.type === "shake") {
+              // Gentler rocking sway
+              const cycle = anim.t % 1.5;
+              if (cycle < 0.6) {
+                const t = cycle / 0.6;
+                const sway = Math.sin(t * Math.PI * 5) * 3 * (1 - t * 0.5);
+                sprites.body.x = sprites.restX + sway;
+                sprites.body.y = sprites.restY - Math.abs(Math.sin(t * Math.PI * 2.5)) * 2;
               } else {
                 sprites.body.x = sprites.restX;
+                sprites.body.y = sprites.restY;
+              }
+            } else if (anim.type === "slump") {
+              if (anim.t < 0.3) {
+                const t = anim.t / 0.3;
+                sprites.body.scale.y = sprites.baseScaleY * (1 - 0.08 * t);
+                sprites.body.skew.x = 0.04 * t;
+              } else if (anim.t < 2.5) {
+                sprites.body.scale.y = sprites.baseScaleY * 0.92;
+                sprites.body.skew.x = 0.04;
+              } else if (anim.t < 3.0) {
+                const t = (anim.t - 2.5) / 0.5;
+                sprites.body.scale.y = sprites.baseScaleY * (0.92 + 0.08 * t);
+                sprites.body.skew.x = 0.04 * (1 - t);
+              } else {
+                sprites.body.scale.y = sprites.baseScaleY;
+                sprites.body.skew.x = 0;
+                sprites.anim = { type: "none", t: 0 };
+                sprites.body.scale.set(sprites.baseScaleX, sprites.baseScaleY);
+                sprites.body.skew.set(0, 0);
               }
             }
           }
         }
 
-        // Idle wander — agents take a short walk and return to their desk
+        // Particle effects — star bursts (done_unacked) and sweat drops (error)
+        for (const m of modules) {
+          for (const sprites of m.agentSprites.values()) {
+            if (sprites.particles.length === 0) {
+              if (sprites.particleGraphics.visible) {
+                sprites.particleGraphics.visible = false;
+                sprites.particleGraphics.clear();
+              }
+              continue;
+            }
+            sprites.particleGraphics.visible = true;
+            sprites.particleGraphics.clear();
+            const dt = app.ticker.deltaTime / 60;
+            sprites.particles = sprites.particles.filter((p) => {
+              p.life += dt;
+              if (p.life >= p.maxLife) return false;
+              p.x += p.vx;
+              p.y += p.vy;
+              p.vy += 0.12; // gravity
+              const alpha = 1 - p.life / p.maxLife;
+              const sz = 2.5;
+              if (p.kind === "star") {
+                // Star shape using PixiJS 8 Graphics.star()
+                sprites.particleGraphics
+                  .star(p.x, p.y, 5, sz, sz * 0.45, 0)
+                  .fill({ color: p.color, alpha });
+              } else {
+                sprites.particleGraphics
+                  .circle(p.x, p.y, sz * 0.6)
+                  .fill({ color: p.color, alpha });
+              }
+              return true;
+            });
+          }
+        }
+
+        // Idle wander — agents take a multi-leg stroll and eventually return home
         {
-          const WALK_SPEED = 70; // px/s
+          const WALK_SPEED = 50; // px/s (slower, more leisurely)
           const dt = app.ticker.deltaTime / 60;
-          const oppositeDir = (d: "N" | "E" | "S" | "W") =>
-            d === "N" ? "S" : d === "S" ? "N" : d === "E" ? "W" : "E";
+
+          // Pick the best walk direction for a delta
+          const walkDirFor = (dx: number, dy: number): "N" | "E" | "S" | "W" => {
+            if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? "E" : "W";
+            return dy > 0 ? "S" : "N";
+          };
 
           for (const m of modules) {
-            if (m.slug === "operations") continue;              // wander disabled for ops
             for (const sprites of m.agentSprites.values()) {
               if (drag && drag.body === sprites.body) continue; // dragging
               if (sprites.anim.type !== "none") continue;       // bouncing/shaking
               if (sprites.lastKind) continue;                   // has active status
+              if (sprites.isWorking) continue;                  // working at desk
 
               if (sprites.wanderTarget) {
-                const { x: tx, y: ty, dir, returning } = sprites.wanderTarget;
+                const { x: tx, y: ty, returning, pause } = sprites.wanderTarget;
+
+                // Pausing — stand and look around
+                if (pause && pause > 0) {
+                  sprites.wanderTarget.pause = pause - dt;
+                  // Occasionally glance a random direction while paused
+                  if (Math.random() < 0.01) {
+                    const dirs = ["N", "E", "S", "W"] as const;
+                    const look = dirs[Math.floor(Math.random() * 4)];
+                    sprites.body.textures = idleFramesForFacing(sprites.allFrames, look);
+                    sprites.body.animationSpeed = 0.06;
+                    sprites.body.play();
+                  }
+                  if (sprites.wanderTarget.pause <= 0) {
+                    // Done pausing — pick next leg or head home
+                    const legsLeft = sprites.wanderTarget.legsLeft ?? 0;
+                    if (legsLeft > 0) {
+                      // Pick a new random nearby point
+                      const angle = Math.random() * Math.PI * 2;
+                      const dist = m.tw * (2 + Math.random() * 3);
+                      const nx = sprites.body.x + Math.cos(angle) * dist;
+                      const ny = sprites.body.y + Math.sin(angle) * dist;
+                      // Clamp to bounds
+                      const cx = Math.max(m.tw, Math.min(m.worldW - m.tw, nx));
+                      const cy = Math.max(m.th, Math.min(m.worldH - m.th, ny));
+                      const dir = walkDirFor(cx - sprites.body.x, cy - sprites.body.y);
+                      sprites.wanderTarget = { x: cx, y: cy, dir, returning: false, legsLeft: legsLeft - 1 };
+                      sprites.body.textures = sprites.allFrames[`walk${dir}`];
+                      sprites.body.animationSpeed = 0.12;
+                      sprites.body.play();
+                    } else {
+                      // Head home
+                      const dir = walkDirFor(sprites.restX - sprites.body.x, sprites.restY - sprites.body.y);
+                      sprites.wanderTarget = { x: sprites.restX, y: sprites.restY, dir, returning: true };
+                      sprites.body.textures = sprites.allFrames[`walk${dir}`];
+                      sprites.body.animationSpeed = 0.12;
+                      sprites.body.play();
+                    }
+                  }
+                  continue;
+                }
+
                 const dx = tx - sprites.body.x;
                 const dy = ty - sprites.body.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
 
                 if (dist < 1.5) {
                   if (returning) {
-                    // Arrived home — restore idle
+                    // Arrived home
                     sprites.body.x = sprites.restX;
                     sprites.body.y = sprites.restY;
                     sprites.shadow.position.set(sprites.restX, sprites.restY - 2);
                     sprites.nameTag.position.set(sprites.restX, sprites.restY - sprites.body.height - 46);
+                    sprites.wanderTarget = null;
+
+                    // Trigger pending status animation if one was queued while walking back
+                    const pk = sprites.pendingKind;
+                    sprites.pendingKind = undefined;
+                    if (pk === "working") {
+                      sprites.isWorking = true;
+                      sprites.body.textures = idleFramesForFacing(sprites.allFrames, sprites.workingFacing);
+                      sprites.body.animationSpeed = 0.04;
+                      sprites.body.play();
+                      sprites.typingDots.visible = true;
+                      continue;
+                    } else if (pk === "done_unacked") {
+                      sprites.anim = { type: "bounce", t: 0 };
+                      const starColors = [0x10b981, 0xfacc15, 0xfbbf24];
+                      const count = 6 + Math.floor(Math.random() * 3);
+                      for (let i = 0; i < count; i++) {
+                        sprites.particles.push({
+                          x: sprites.restX, y: sprites.restY - sprites.body.height / 2,
+                          vx: (Math.random() - 0.5) * 3, vy: -(2 + Math.random() * 2),
+                          life: 0, maxLife: 0.8 + Math.random() * 0.4,
+                          color: starColors[Math.floor(Math.random() * starColors.length)], kind: "star",
+                        });
+                      }
+                    } else if (pk === "awaiting_input") {
+                      sprites.anim = { type: "shake", t: 0 };
+                    } else if (pk === "error") {
+                      sprites.anim = { type: "slump", t: 0 };
+                    }
+
                     sprites.body.textures = idleFramesForFacing(sprites.allFrames, sprites.idleFacing);
                     sprites.body.animationSpeed = 0.08;
                     sprites.body.play();
-                    sprites.wanderTarget = null;
-                    sprites.wanderTimer = 4 + Math.random() * 8;
+                    sprites.wanderTimer = 6 + Math.random() * 12;
                   } else {
-                    // Arrived at wander point — head back
-                    const retDir = oppositeDir(dir);
-                    sprites.wanderTarget = { x: sprites.restX, y: sprites.restY, dir: retDir, returning: true };
-                    sprites.body.textures = sprites.allFrames[`walk${retDir}`];
-                    sprites.body.animationSpeed = 0.14;
+                    // Arrived at waypoint — pause and look around before continuing
+                    sprites.body.textures = idleFramesForFacing(sprites.allFrames, sprites.wanderTarget.dir);
+                    sprites.body.animationSpeed = 0.06;
                     sprites.body.play();
+                    sprites.wanderTarget.pause = 1.5 + Math.random() * 3;
                   }
                 } else {
+                  // Walk toward target — update facing if direction shifts significantly
+                  const newDir = walkDirFor(dx, dy);
+                  if (newDir !== sprites.wanderTarget.dir) {
+                    sprites.wanderTarget.dir = newDir;
+                    sprites.body.textures = sprites.allFrames[`walk${newDir}`];
+                    sprites.body.animationSpeed = 0.12;
+                    sprites.body.play();
+                  }
                   const step = Math.min(WALK_SPEED * dt, dist);
                   sprites.body.x += (dx / dist) * step;
                   sprites.body.y += (dy / dist) * step;
@@ -1322,21 +1990,105 @@ export default function Station({
               } else {
                 sprites.wanderTimer -= dt;
                 if (sprites.wanderTimer <= 0) {
-                  const dirs = ["N", "E", "S", "W"] as const;
-                  const dir = dirs[Math.floor(Math.random() * 4)];
-                  const tileDist = m.tw * (1.5 + Math.random() * 2.5);
-                  const tx = sprites.restX + (dir === "E" ? tileDist : dir === "W" ? -tileDist : 0);
-                  const ty = sprites.restY + (dir === "S" ? tileDist : dir === "N" ? -tileDist : 0);
-                  // Keep within module world bounds with a tile-sized margin
-                  if (tx > m.tw && ty > m.th && tx < m.worldW - m.tw && ty < m.worldH - m.th) {
-                    sprites.wanderTarget = { x: tx, y: ty, dir, returning: false };
-                    sprites.body.textures = sprites.allFrames[`walk${dir}`];
-                    sprites.body.animationSpeed = 0.14;
-                    sprites.body.play();
-                  } else {
-                    sprites.wanderTimer = 2 + Math.random() * 3;
-                  }
+                  // Start a multi-leg wander: 2-4 waypoints before returning
+                  const angle = Math.random() * Math.PI * 2;
+                  const dist = m.tw * (2.5 + Math.random() * 3.5);
+                  const tx = sprites.body.x + Math.cos(angle) * dist;
+                  const ty = sprites.body.y + Math.sin(angle) * dist;
+                  // Clamp to bounds
+                  const cx = Math.max(m.tw, Math.min(m.worldW - m.tw, tx));
+                  const cy = Math.max(m.th, Math.min(m.worldH - m.th, ty));
+                  const dir = walkDirFor(cx - sprites.restX, cy - sprites.restY);
+                  const legs = 1 + Math.floor(Math.random() * 3); // 1-3 more stops after this one
+                  sprites.wanderTarget = { x: cx, y: cy, dir, returning: false, legsLeft: legs };
+                  sprites.body.textures = sprites.allFrames[`walk${dir}`];
+                  sprites.body.animationSpeed = 0.12;
+                  sprites.body.play();
                 }
+              }
+            }
+          }
+        }
+
+        // Social encounters — wandering agents that get close face each other and chat
+        for (const m of modules) {
+          const wanderers = [...m.agentSprites.values()].filter(
+            (s) => s.wanderTarget && !s.wanderTarget.returning && s.wanderTarget.pause && s.wanderTarget.pause > 0
+          );
+          // Also check walking agents that haven't paused yet
+          const walkers = [...m.agentSprites.values()].filter(
+            (s) => s.wanderTarget && !s.wanderTarget.returning && !s.wanderTarget.pause && !s.isWorking && s.anim.type === "none"
+          );
+          const allWanderers = [...wanderers, ...walkers];
+          for (let i = 0; i < allWanderers.length; i++) {
+            for (let j = i + 1; j < allWanderers.length; j++) {
+              const a = allWanderers[i];
+              const b = allWanderers[j];
+              const dx = a.body.x - b.body.x;
+              const dy = a.body.y - b.body.y;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              const chatRange = m.tw * 2.5;
+              if (dist < chatRange && dist > 1) {
+                // Face each other
+                const dirAtoB: "N"|"E"|"S"|"W" = Math.abs(dx) > Math.abs(dy)
+                  ? (dx < 0 ? "E" : "W") : (dy < 0 ? "S" : "N");
+                const dirBtoA: "N"|"E"|"S"|"W" = Math.abs(dx) > Math.abs(dy)
+                  ? (dx < 0 ? "W" : "E") : (dy < 0 ? "N" : "S");
+                // Only trigger if both aren't already chatting (check if paused facing each other)
+                const aAlreadyChatting = a.wanderTarget?.pause && a.wanderTarget.pause > 2;
+                const bAlreadyChatting = b.wanderTarget?.pause && b.wanderTarget.pause > 2;
+                if (!aAlreadyChatting && !bAlreadyChatting) {
+                  // Stop both and face each other
+                  a.body.textures = idleFramesForFacing(a.allFrames, dirAtoB);
+                  a.body.animationSpeed = 0.06;
+                  a.body.play();
+                  if (a.wanderTarget) a.wanderTarget.pause = 3 + Math.random() * 3;
+
+                  b.body.textures = idleFramesForFacing(b.allFrames, dirBtoA);
+                  b.body.animationSpeed = 0.06;
+                  b.body.play();
+                  if (b.wanderTarget) b.wanderTarget.pause = 3 + Math.random() * 3;
+
+                  // Show emote on one of them (random pick)
+                  const talker = Math.random() < 0.5 ? a : b;
+                  talker.emoteTimer = 2.0;
+                }
+              }
+            }
+          }
+        }
+
+        // Emote bubble rendering — small speech icon above chatting agents
+        {
+          const dt = app.ticker.deltaTime / 60;
+          for (const m of modules) {
+            for (const sprites of m.agentSprites.values()) {
+              if (sprites.emoteTimer > 0) {
+                sprites.emoteTimer -= dt;
+                sprites.emoteGraphics.visible = true;
+                sprites.emoteGraphics.clear();
+                sprites.emoteGraphics.position.set(
+                  sprites.body.x + 8,
+                  sprites.body.y - sprites.body.height - 12,
+                );
+                const alpha = Math.min(1, sprites.emoteTimer * 2);
+                // Small speech bubble with "!" or "♪" feel
+                const bw = 10, bh = 8;
+                sprites.emoteGraphics
+                  .roundRect(-bw / 2, -bh / 2, bw, bh, 2)
+                  .fill({ color: 0xffffff, alpha: alpha * 0.9 })
+                  .stroke({ color: 0x000000, alpha: alpha * 0.3, width: 0.5 });
+                // Tail
+                sprites.emoteGraphics
+                  .moveTo(-1, bh / 2).lineTo(-3, bh / 2 + 3).lineTo(1, bh / 2)
+                  .fill({ color: 0xffffff, alpha: alpha * 0.9 });
+                // Exclamation dot inside
+                sprites.emoteGraphics
+                  .rect(-0.8, -3, 1.6, 4).fill({ color: 0x333333, alpha })
+                  .circle(0, 3, 0.8).fill({ color: 0x333333, alpha });
+              } else if (sprites.emoteGraphics.visible) {
+                sprites.emoteGraphics.visible = false;
+                sprites.emoteGraphics.clear();
               }
             }
           }

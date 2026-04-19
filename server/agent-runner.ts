@@ -15,14 +15,24 @@ import { resolve, join } from "node:path";
 import { readFileSync, appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { db, getAgent, getResumeSessionId, dequeuePrompt, agentIsBusy, type AgentRunRow } from "./db.js";
+import {
+  db,
+  getAgent,
+  getResumeSessionId,
+  dequeuePrompt,
+  agentIsBusy,
+  getDelegationStatus,
+  listDelegationsBy,
+  upsertRateLimit,
+  type AgentRunRow,
+} from "./db.js";
 import {
   AgentBuilderError,
   createAgent as createAgentImpl,
   isValidOfficeSlug,
 } from "../lib/agent-builder.js";
 
-const PORT = 3100;
+const PORT = Number(process.env.RUNNER_PORT) || 3100;
 const ROOT = process.cwd();
 const CHANGELOG_PATH = join(ROOT, "data", "changelog.jsonl");
 
@@ -48,8 +58,21 @@ function insertEvent(runId: string, kind: string, payload: unknown) {
     .run(runId, Date.now(), kind, JSON.stringify(payload));
 }
 
+const ALLOWED_RUN_COLUMNS = new Set([
+  "status",
+  "ended_at",
+  "last_token_at",
+  "error",
+  "session_id",
+  "input_tokens",
+  "output_tokens",
+  "cache_read_tokens",
+  "cache_creation_tokens",
+  "acknowledged_at",
+]);
+
 function updateRun(runId: string, patch: Partial<AgentRunRow>) {
-  const cols = Object.keys(patch);
+  const cols = Object.keys(patch).filter((c) => ALLOWED_RUN_COLUMNS.has(c));
   if (cols.length === 0) return;
   const sql = `UPDATE agent_runs SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE id = ?`;
   db().prepare(sql).run(...cols.map((c) => (patch as Record<string, unknown>)[c]), runId);
@@ -114,6 +137,20 @@ function makeInputServer(runId: string) {
 }
 
 /**
+ * Wrap a delegated prompt with a sign-off instruction. The delegator will poll
+ * `check_delegation` and read whatever the agent's final assistant message is —
+ * so we bake in a closer to make that final message useful regardless of which
+ * Claude they are. Applied only to the prompt sent to runAgent; the raw prompt
+ * is still stored in tasks.body for the inspector.
+ */
+function withDelegationSignoff(prompt: string, delegatorAgentId: string): string {
+  return `${prompt}
+
+---
+(You're handling a delegated task from ${delegatorAgentId}. They will poll check_delegation to see your result. When you finish — whether you completed it, hit a blocker, or decided not to do it — end with a 1–3 sentence summary as your final message. State what you did (or didn't do) and what "done" looks like now. That summary is what they'll read.)`;
+}
+
+/**
  * Start a child run on behalf of a delegating agent. Creates task + assignment
  * + run rows (with parentage), then fires runAgent fire-and-forget. If the
  * target is busy, returns `{ queued: true }` after enqueuing. Returns null on
@@ -135,15 +172,18 @@ function startDelegatedRun(params: {
   if (!target) return { error: `no agent '${targetAgentId}' in ${officeSlug}` };
   if (!target.isReal) return { error: `agent '${targetAgentId}' is not a real agent` };
 
+  const wrappedPrompt = withDelegationSignoff(prompt, params.delegatorAgentId);
+
   if (agentIsBusy(officeSlug, targetAgentId)) {
     // Queued prompts currently don't carry parentage; accept that limitation.
     // When the queue drains, the new run will have no delegated_by — that's OK
-    // for MVP (the delegator gets a clear "queued" response).
+    // for MVP (the delegator gets a clear "queued" response). Still wrap the
+    // prompt so the queued run at least produces a useful final message.
     const queueId = db().prepare(
       "INSERT INTO prompt_queue (id, agent_id, office_slug, title, prompt, queued_at) VALUES (?, ?, ?, ?, ?, ?)",
     );
     const id = newId();
-    queueId.run(id, targetAgentId, officeSlug, title, prompt, Date.now());
+    queueId.run(id, targetAgentId, officeSlug, title, wrappedPrompt, Date.now());
     return { queued: true, queueId: id };
   }
 
@@ -186,7 +226,7 @@ function startDelegatedRun(params: {
     runId,
     agentId: targetAgentId,
     officeSlug,
-    prompt,
+    prompt: wrappedPrompt,
   });
 
   return { queued: false, runId };
@@ -207,8 +247,110 @@ function makeDelegateServer(
     name: "robots-delegate",
     tools: [
       tool(
+        "check_delegation",
+        `Check on a task you delegated earlier. Pass the runId returned by delegate_task to see if they're done, what they said, or if they're stuck. Omit runId to get a list of your recent delegations. Use this when you want to know whether a dispatched teammate has finished before you move on.`,
+        {
+          runId: z
+            .string()
+            .optional()
+            .describe(
+              "The run id returned by delegate_task. If omitted, returns a list of your recent delegations.",
+            ),
+        },
+        async (args) => {
+          if (!args.runId) {
+            const list = listDelegationsBy(delegatorAgentId, officeSlug, 10);
+            if (list.length === 0) {
+              return {
+                content: [
+                  { type: "text", text: "You haven't delegated anything yet." },
+                ],
+              };
+            }
+            const lines = list.map((r) => {
+              const dur = r.endedAt
+                ? `${Math.round((r.endedAt - r.startedAt) / 1000)}s`
+                : `running ${Math.round((Date.now() - r.startedAt) / 1000)}s`;
+              return `- ${r.runId.slice(0, 8)}  ${r.agentId.padEnd(10)}  ${r.status.padEnd(14)}  ${dur}  ${r.taskTitle ?? ""}`;
+            });
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Your recent delegations (newest first):\n${lines.join("\n")}`,
+                },
+              ],
+            };
+          }
+
+          const s = getDelegationStatus(args.runId, delegatorAgentId);
+          if (!s) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No delegation found with runId ${args.runId} that you dispatched. Either the runId is wrong, or the run was started by someone else.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          const header = `Run ${s.runId.slice(0, 8)} → ${s.agentId} (${s.taskTitle ?? "untitled"})\nStatus: ${s.status}`;
+          if (s.status === "done") {
+            const body = s.finalResult ?? s.lastAssistantText ?? "(no output captured)";
+            return {
+              content: [{ type: "text", text: `${header}\n\nFinal reply:\n${body}` }],
+            };
+          }
+          if (s.status === "error") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `${header}\nError: ${s.error ?? "unknown"}`,
+                },
+              ],
+            };
+          }
+          if (s.status === "interrupted") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `${header}\nThe runner restarted mid-task so this run was interrupted (not a task failure). Re-dispatch if the work still needs to happen.`,
+                },
+              ],
+            };
+          }
+          if (s.status === "awaiting_input") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `${header}\nWaiting on Connor for: ${s.pendingQuestion ?? "(question not captured)"}`,
+                },
+              ],
+            };
+          }
+          // starting / running
+          const progress = s.lastAssistantText
+            ? `\n\nLast progress line:\n${s.lastAssistantText}`
+            : "\n(no assistant output yet)";
+          const elapsed = Math.round((Date.now() - s.startedAt) / 1000);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `${header}\nElapsed: ${elapsed}s${progress}`,
+              },
+            ],
+          };
+        },
+      ),
+      tool(
         "delegate_task",
-        `Delegate a task to a teammate in the ${officeSlug} office. Creates a new run on their agent, tagged with you as the delegator. Use this to spawn focused sub-agents (typically Sonnet workers) for specific chunks of work while you stay at a higher altitude. Returns their run id so you can track them. If the target is busy, the task is queued instead.`,
+        `Delegate a task to a teammate in the ${officeSlug} office. Creates a new run on their agent, tagged with you as the delegator. Use this to spawn focused sub-agents (typically Sonnet workers) for specific chunks of work. By default, this BLOCKS until the teammate finishes and returns their final reply as the tool result — so you can dispatch and continue with their answer in hand. Pass \`wait: false\` for true fire-and-forget (you'll get back just a runId and can call check_delegation later). If the target is busy, the task is queued instead.`,
         {
           agentId: z
             .string()
@@ -224,10 +366,17 @@ function makeDelegateServer(
             .string()
             .optional()
             .describe("Optional short title for the task. Auto-derived from the prompt if omitted."),
+          wait: z
+            .boolean()
+            .optional()
+            .describe(
+              "Block until the teammate finishes and return their final reply as the tool result (default: true). Set false for fire-and-forget — you'll only get a runId and can poll with check_delegation.",
+            ),
         },
         async (args) => {
           const title =
             args.title?.trim() || args.prompt.split("\n")[0].slice(0, 80);
+          const shouldWait = args.wait !== false; // default true
           const result = startDelegatedRun({
             officeSlug,
             targetAgentId: args.agentId,
@@ -244,20 +393,103 @@ function makeDelegateServer(
             };
           }
           if (result.queued) {
+            // Queued prompts don't carry parentage, so we can't poll them here.
+            // Always return the queued receipt regardless of wait flag.
             return {
               content: [
                 {
                   type: "text",
-                  text: `${args.agentId} is busy. Queued (id: ${result.queueId}) — they'll pick it up when their current run ends.`,
+                  text: `${args.agentId} is busy. Queued (id: ${result.queueId}) — they'll pick it up when their current run ends. (Queued runs can't be awaited; re-dispatch when they're free if you need the reply inline.)`,
                 },
               ],
             };
           }
+
+          if (!shouldWait) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Delegated to ${args.agentId}. Run id: ${result.runId}. They're working on it now (fire-and-forget mode — call check_delegation when you want their reply).`,
+                },
+              ],
+            };
+          }
+
+          // Block until child finishes. Poll the DB every 2s up to MAX_WAIT_MS.
+          // The delegator's SDK query() loop stays in the tool-call await, so
+          // their run stays "running" in the UI while we wait. Child finishing
+          // fires the 'done' status event and updateRun flips status to done.
+          const MAX_WAIT_MS = 30 * 60 * 1000; // 30 min hard cap
+          const POLL_MS = 2000;
+          const start = Date.now();
+          while (Date.now() - start < MAX_WAIT_MS) {
+            await new Promise((r) => setTimeout(r, POLL_MS));
+            const s = getDelegationStatus(result.runId, delegatorAgentId);
+            if (!s) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Delegation ${result.runId} disappeared unexpectedly — check agent_runs table.`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+            if (s.status === "done") {
+              const body = s.finalResult ?? s.lastAssistantText ?? "(no output captured)";
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${args.agentId} finished (run ${result.runId.slice(0, 8)}):\n\n${body}`,
+                  },
+                ],
+              };
+            }
+            if (s.status === "error") {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${args.agentId} errored (run ${result.runId.slice(0, 8)}): ${s.error ?? "unknown"}`,
+                  },
+                ],
+                isError: true,
+              };
+            }
+            if (s.status === "interrupted") {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${args.agentId}'s run (${result.runId.slice(0, 8)}) was interrupted by a runner restart. Re-dispatch if needed.`,
+                  },
+                ],
+              };
+            }
+            // awaiting_input: surface the pending question so the delegator
+            // knows the child is blocked on Connor, not stuck.
+            if (s.status === "awaiting_input") {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `${args.agentId} is blocked waiting on Connor for: "${s.pendingQuestion ?? "(question not captured)"}" (run ${result.runId.slice(0, 8)}). Connor must reply before they can continue. Check back later with check_delegation.`,
+                  },
+                ],
+              };
+            }
+            // status === 'starting' or 'running' — keep waiting
+          }
+
+          // Timeout hit without terminal status
           return {
             content: [
               {
                 type: "text",
-                text: `Delegated to ${args.agentId}. Run id: ${result.runId}. They're working on it now.`,
+                text: `Timed out after ${MAX_WAIT_MS / 60000} min waiting on ${args.agentId} (run ${result.runId.slice(0, 8)}). They may still be working — call check_delegation to see current state.`,
               },
             ],
           };
@@ -454,6 +686,17 @@ async function runAgent(params: {
     mcpServers["robots-brand"] = makeBrandServer(runId, officeSlug);
     extraAllowed.push("mcp__robots-brand__create_agent");
   }
+  // Delegation is available to every real agent — directors, department
+  // heads, and ICs alike. Anyone who leads a workstream can spin off helpers.
+  mcpServers["robots-delegate"] = makeDelegateServer(
+    officeSlug,
+    agentId,
+    runId,
+  );
+  extraAllowed.push(
+    "mcp__robots-delegate__delegate_task",
+    "mcp__robots-delegate__check_delegation",
+  );
 
   try {
     const q = query({
@@ -464,6 +707,8 @@ async function runAgent(params: {
         permissionMode: "default",
         settingSources: ["project"],
         mcpServers,
+        betas: [],
+        settings: { autoCompactWindow: 80_000, disableAutoMode: "disable" },
         ...(agent.model ? { model: agent.model } : {}),
         ...(resume ? { resume } : {}),
       },
@@ -520,6 +765,16 @@ async function runAgent(params: {
           ended_at: now,
           session_id: msg.session_id,
         });
+      } else if (msg.type === "rate_limit_event") {
+        const info = msg.rate_limit_info;
+        const key = info.rateLimitType ?? "five_hour";
+        upsertRateLimit({
+          key,
+          utilization: info.utilization ?? 0,
+          resetsAt: info.resetsAt,
+          status: info.status,
+          rateLimitType: info.rateLimitType,
+        });
       } else if (msg.type === "system") {
         // skip noise
       }
@@ -552,7 +807,11 @@ async function runAgent(params: {
       const nextRunId = newId();
       const now = Date.now();
       const ag = getAgent(officeSlug, agentId);
-      const deskId = ag?.deskId ?? "";
+      if (!ag) {
+        console.warn(`[runner] agent ${agentId} gone during queue drain, skipping`);
+        return;
+      }
+      const deskId = ag.deskId;
 
       d.transaction(() => {
         d.prepare(
@@ -669,16 +928,19 @@ db();
 const LOG_DIR = join(ROOT, "data");
 mkdirSync(LOG_DIR, { recursive: true });
 
-// Zombie cleanup: mark any in-flight runs as failed on restart
+// Zombie cleanup: mark any in-flight runs as `interrupted` on restart. This is
+// distinct from `error` — the work didn't fail, the runner process died. The
+// notifications API and the UI both treat interrupted as a silent terminal
+// state (no red bubble, no ghost error toast).
 {
   const zombies = db()
     .prepare(
-      `UPDATE agent_runs SET status = 'error', error = 'runner_restart', ended_at = ?
-       WHERE status NOT IN ('done', 'error')`,
+      `UPDATE agent_runs SET status = 'interrupted', error = 'runner_restart', ended_at = ?
+       WHERE status NOT IN ('done', 'error', 'interrupted')`,
     )
     .run(Date.now());
   if (zombies.changes > 0) {
-    console.log(`[runner] cleaned up ${zombies.changes} zombie run(s) from previous process`);
+    console.log(`[runner] marked ${zombies.changes} run(s) as interrupted from previous process`);
   }
 }
 

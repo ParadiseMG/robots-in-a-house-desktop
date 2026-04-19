@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { db, getAgent, getResumeSessionId } from "@/server/db";
+import { db, getAgent, getResumeSessionId, agentIsBusy } from "@/server/db";
 
 const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:3100";
 
@@ -27,6 +27,9 @@ export async function POST(req: Request) {
   if (!agent) return NextResponse.json({ error: "agent not found" }, { status: 404 });
   if (!agent.isReal) {
     return NextResponse.json({ error: "agent is not real" }, { status: 400 });
+  }
+  if (agentIsBusy(officeSlug, agentId)) {
+    return NextResponse.json({ error: "agent is busy" }, { status: 409 });
   }
 
   const resume = getResumeSessionId(officeSlug, agentId);

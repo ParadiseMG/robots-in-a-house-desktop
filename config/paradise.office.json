@@ -14,9 +14,16 @@
       "hue": 12,
       "saturation": 1.1,
       "brightness": 1.05,
-      "contrast": 1.0,
+      "contrast": 1,
       "tint": "#f5c842",
       "tintStrength": 0.08
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [8, 33],
+      "monitor": [10, 30],
+      "chairType": "towel",
+      "towelColor": "#f59e0b"
     },
     "premadeRoom": {
       "layers": [
@@ -38,47 +45,79 @@
     "_comment": "Source is 384x256 (24x16 tiles at 16px). Rows 0-10 = dry sand, 11 = tide line, 12-15 = ocean. Agents can wander to the water's edge."
   },
   "rooms": [
-    { "id": "finance", "name": "Finance", "gridX": 1, "gridY": 1, "w": 4, "h": 4 },
-    { "id": "director", "name": "Director", "gridX": 6, "gridY": 1, "w": 4, "h": 4, "warRoom": { "gridX": 9, "gridY": 2 } },
-    { "id": "marketing", "name": "Marketing", "gridX": 11, "gridY": 1, "w": 7, "h": 5 },
-    { "id": "events", "name": "Events", "gridX": 1, "gridY": 7, "w": 9, "h": 6 },
-    { "id": "commerce", "name": "Commerce", "gridX": 11, "gridY": 7, "w": 7, "h": 6 }
+    {
+      "id": "director",
+      "name": "Director",
+      "gridX": 6,
+      "gridY": 1,
+      "w": 4,
+      "h": 4,
+      "warRoom": {
+        "gridX": 9,
+        "gridY": 2
+      }
+    }
   ],
   "desks": [
-    { "id": "desk-finance", "roomId": "finance", "gridX": 3, "gridY": 3, "facing": "S" },
-    { "id": "desk-maestro", "roomId": "director", "gridX": 7, "gridY": 3, "facing": "S" },
-    { "id": "desk-signal", "roomId": "marketing", "gridX": 14, "gridY": 3, "facing": "S" },
-    { "id": "desk-hype", "roomId": "marketing", "gridX": 12, "gridY": 4, "facing": "S" },
-    { "id": "desk-reel", "roomId": "marketing", "gridX": 16, "gridY": 4, "facing": "S" },
-    { "id": "desk-melody", "roomId": "events", "gridX": 4, "gridY": 8, "facing": "S" },
-    { "id": "desk-beat", "roomId": "events", "gridX": 2, "gridY": 10, "facing": "S" },
-    { "id": "desk-stub", "roomId": "events", "gridX": 4, "gridY": 10, "facing": "S" },
-    { "id": "desk-pitch", "roomId": "events", "gridX": 7, "gridY": 10, "facing": "S" },
-    { "id": "desk-till", "roomId": "commerce", "gridX": 14, "gridY": 8, "facing": "S" },
-    { "id": "desk-gate", "roomId": "commerce", "gridX": 12, "gridY": 10, "facing": "S" },
-    { "id": "desk-rack", "roomId": "commerce", "gridX": 16, "gridY": 10, "facing": "S" }
+    {
+      "id": "desk-maestro",
+      "roomId": "director",
+      "gridX": 11,
+      "gridY": 1,
+      "facing": "S"
+    },
+    {
+      "id": "desk-stack",
+      "roomId": "director",
+      "gridX": 20,
+      "gridY": 5,
+      "facing": "S"
+    },
+    {
+      "id": "desk-spark",
+      "roomId": "director",
+      "gridX": 3,
+      "gridY": 7,
+      "facing": "S"
+    },
+    {
+      "id": "desk-stage",
+      "roomId": "director",
+      "gridX": 0,
+      "gridY": 7,
+      "facing": "S"
+    },
+    {
+      "id": "desk-radar",
+      "roomId": "director",
+      "gridX": 11,
+      "gridY": 4,
+      "facing": "S"
+    },
+    {
+      "id": "desk-take",
+      "roomId": "director",
+      "gridX": 17,
+      "gridY": 1,
+      "facing": "S"
+    },
+    {
+      "id": "desk-chisel",
+      "roomId": "director",
+      "gridX": 12,
+      "gridY": 13,
+      "facing": "S",
+      "label": "Chisel"
+    },
+    {
+      "id": "desk-blastoise",
+      "roomId": "director",
+      "gridX": 6,
+      "gridY": 5,
+      "facing": "S"
+    }
   ],
   "agents": [
-    {
-      "id": "ledger",
-      "deskId": "desk-finance",
-      "name": "Tab",
-      "role": "Finance Director",
-      "spritePack": "limezu/office/06",
-      "visual": {
-        "premade": "premade_04.png"
-      },
-      "isReal": true,
-      "cwd": "agent-workspaces/paradise/ledger",
-      "allowedTools": [
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "Bash"
-      ]
-    },
     {
       "id": "maestro",
       "deskId": "desk-maestro",
@@ -93,166 +132,183 @@
       "cwd": "agent-workspaces/paradise/maestro",
       "allowedTools": [
         "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "mcp__robots-brand__create_agent",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6"
+    },
+    {
+      "id": "stack",
+      "deskId": "desk-stack",
+      "name": "Stack",
+      "role": "Finance Lead",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_04.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/paradise/stack",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6",
+      "isDeptHead": true
+    },
+    {
+      "id": "spark",
+      "deskId": "desk-spark",
+      "name": "Spark",
+      "role": "Marketing Lead",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_14.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/paradise/spark",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6",
+      "isDeptHead": true
+    },
+    {
+      "id": "stage",
+      "deskId": "desk-stage",
+      "name": "Stage",
+      "role": "Events Lead",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_19.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/paradise/stage",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6",
+      "isDeptHead": true
+    },
+    {
+      "id": "radar",
+      "deskId": "desk-radar",
+      "name": "Radar",
+      "role": "Talent Lead",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_06.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/paradise/radar",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6",
+      "isDeptHead": true
+    },
+    {
+      "id": "take",
+      "deskId": "desk-take",
+      "name": "Take",
+      "role": "Commerce Lead",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_02.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/paradise/take",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6",
+      "isDeptHead": true
+    },
+    {
+      "id": "chisel",
+      "name": "Chisel",
+      "role": "Implementation Builder",
+      "deskId": "desk-chisel",
+      "spritePack": "limezu/office/auto",
+      "isReal": true,
+      "isHead": false,
+      "cwd": "agent-workspaces/paradise/chisel",
+      "allowedTools": [
+        "Read",
         "Write",
         "Edit",
         "Grep",
         "Glob",
         "Bash",
-        "mcp__robots-brand__create_agent"
+        "WebSearch",
+        "WebFetch"
       ],
-      "model": "claude-opus-4-6"
-    },
-    {
-      "id": "signal",
-      "deskId": "desk-signal",
-      "name": "Signal",
-      "role": "Marketing Lead",
-      "spritePack": "limezu/office/11",
-      "visual": { "premade": "premade_11.png" },
-      "isReal": true,
-      "isLead": true,
-      "cwd": "agent-workspaces/paradise/signal",
-      "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash"],
-      "model": "claude-opus-4-6"
-    },
-    {
-      "id": "hype",
-      "deskId": "desk-hype",
-      "name": "Flyer",
-      "role": "Promo",
-      "spritePack": "limezu/office/17",
       "visual": {
-        "premade": "premade_17.png"
+        "premade": "premade_06.png"
       },
-      "isReal": true,
-      "cwd": "agent-workspaces/paradise/hype",
-      "allowedTools": [
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "Bash"
-      ]
+      "model": "claude-sonnet-4-20250514"
     },
     {
-      "id": "reel",
-      "deskId": "desk-reel",
-      "name": "Reel",
-      "role": "Content",
-      "spritePack": "limezu/office/04",
-      "visual": { "premade": "premade_06.png" },
-      "isReal": true,
-      "cwd": "agent-workspaces/paradise/reel",
-      "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash"]
-    },
-    {
-      "id": "melody",
-      "deskId": "desk-melody",
-      "name": "Cue",
-      "role": "Events Lead",
-      "spritePack": "limezu/office/10",
-      "visual": {
-        "premade": "premade_10.png"
-      },
-      "isReal": true,
-      "isLead": true,
-      "cwd": "agent-workspaces/paradise/melody",
-      "allowedTools": [
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "Bash"
-      ],
-      "model": "claude-opus-4-6"
-    },
-    {
-      "id": "beat",
-      "deskId": "desk-beat",
-      "name": "Scout",
-      "role": "A&R",
-      "spritePack": "limezu/office/15",
-      "visual": {
-        "premade": "premade_15.png"
-      },
-      "isReal": true,
-      "cwd": "agent-workspaces/paradise/beat",
-      "allowedTools": [
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "Bash"
-      ]
-    },
-    {
-      "id": "stub",
-      "deskId": "desk-stub",
-      "name": "Stub",
-      "role": "Guest List",
-      "spritePack": "limezu/office/19",
-      "visual": { "premade": "premade_19.png" },
-      "isReal": true,
-      "cwd": "agent-workspaces/paradise/stub",
-      "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash"]
-    },
-    {
-      "id": "pitch",
-      "deskId": "desk-pitch",
-      "name": "Pitch",
-      "role": "Sponsorships",
-      "spritePack": "limezu/office/02",
-      "visual": { "premade": "premade_02.png" },
-      "isReal": true,
-      "cwd": "agent-workspaces/paradise/pitch",
-      "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash"]
-    },
-    {
-      "id": "till",
-      "deskId": "desk-till",
-      "name": "Till",
-      "role": "Commerce Lead",
-      "spritePack": "limezu/office/14",
-      "visual": { "premade": "premade_14.png" },
-      "isReal": true,
-      "isLead": true,
-      "cwd": "agent-workspaces/paradise/till",
-      "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash"],
-      "model": "claude-opus-4-6"
-    },
-    {
-      "id": "gate",
-      "deskId": "desk-gate",
-      "name": "Velvet",
-      "role": "Ticketing",
-      "spritePack": "limezu/office/03",
+      "id": "blastoise",
+      "deskId": "desk-blastoise",
+      "name": "Blastoise",
+      "role": "Marketing Blasts",
+      "spritePack": "limezu/office/auto",
       "visual": {
         "premade": "premade_03.png"
       },
       "isReal": true,
-      "cwd": "agent-workspaces/paradise/gate",
+      "cwd": "agent-workspaces/paradise/blastoise",
       "allowedTools": [
         "Read",
         "Write",
         "Edit",
         "Grep",
         "Glob",
-        "Bash"
-      ]
-    },
-    {
-      "id": "rack",
-      "deskId": "desk-rack",
-      "name": "Rack",
-      "role": "Merch",
-      "spritePack": "limezu/office/08",
-      "visual": { "premade": "santa_claus.png" },
-      "isReal": true,
-      "cwd": "agent-workspaces/paradise/rack",
-      "allowedTools": ["Read", "Write", "Edit", "Grep", "Glob", "Bash"]
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-sonnet-4-20250514"
     }
   ]
 }

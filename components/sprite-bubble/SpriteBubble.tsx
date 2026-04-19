@@ -7,6 +7,8 @@ type BaseProps = {
   y: number;
   containerRef: RefObject<HTMLDivElement | null>;
   onDismiss: () => void;
+  /** Optional role icon shown before text (emoji or short string) */
+  icon?: string;
 };
 
 type InteractiveProps = BaseProps & {
@@ -22,7 +24,13 @@ type AmbientProps = BaseProps & {
   onSubmit?: never;
 };
 
-type Props = InteractiveProps | AmbientProps;
+type ThinkingProps = BaseProps & {
+  mode: "thinking";
+  text?: never;
+  onSubmit?: never;
+};
+
+type Props = InteractiveProps | AmbientProps | ThinkingProps;
 
 export default function SpriteBubble({
   x,
@@ -32,6 +40,7 @@ export default function SpriteBubble({
   onSubmit,
   onDismiss,
   text: ambientText,
+  icon,
 }: Props) {
   const [inputText, setInputText] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -53,7 +62,7 @@ export default function SpriteBubble({
     if (mode !== "ambient") inputRef.current?.focus();
   }, [mode]);
 
-  // Ambient: auto-fade after 3s
+  // Ambient: auto-fade after 3s. Thinking persists until replaced by text (no auto-dismiss).
   useEffect(() => {
     if (mode !== "ambient") return;
     const t = window.setTimeout(() => {
@@ -108,23 +117,55 @@ export default function SpriteBubble({
     transform: "translate(-50%, -100%)",
   };
 
-  // Ambient mode: read-only pill
+  // Thinking mode: thought bubble with animated dots
+  if (mode === "thinking") {
+    return (
+      <div
+        ref={bubbleRef}
+        className="absolute z-40 pointer-events-none transition-opacity duration-400"
+        style={{ ...style, opacity: visible ? 1 : 0, imageRendering: "pixelated" }}
+      >
+        <div className="rounded-md border-2 border-white/20 bg-black/70 px-3 py-1.5 shadow-[0_0_0_1px_rgba(0,0,0,0.8)] backdrop-blur-sm">
+          <div className="flex items-center gap-0.5">
+            {[0, 1, 2].map((i) => (
+              <span
+                key={i}
+                className="inline-block h-1.5 w-1.5 rounded-full bg-white/70"
+                style={{
+                  animation: `thinkBounce 1.2s ease-in-out ${i * 0.2}s infinite`,
+                  animationDelay: `${i * 0.15}s`,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+        {/* Thought bubble trail: two small circles */}
+        <div className="flex items-end gap-0.5 pl-2">
+          <div className="h-1.5 w-1.5 rounded-full bg-black/70 border border-white/20" />
+          <div className="h-1 w-1 rounded-full bg-black/70 border border-white/20" />
+        </div>
+      </div>
+    );
+  }
+
+  // Ambient mode: read-only speech bubble with pixel-art styling
   if (mode === "ambient") {
     return (
       <div
         ref={bubbleRef}
         className="absolute z-40 pointer-events-none transition-opacity duration-400"
-        style={{ ...style, opacity: visible ? 1 : 0 }}
+        style={{ ...style, opacity: visible ? 1 : 0, imageRendering: "pixelated" }}
       >
-        <div className="max-w-[200px] rounded-md border border-white/15 bg-black/80 px-2 py-1 font-mono text-[10px] text-white/70 shadow-lg backdrop-blur-sm">
+        <div className="max-w-[200px] rounded-md border-2 border-white/30 bg-black/80 px-2 py-1 font-mono text-[10px] text-white/70 shadow-[0_0_0_1px_rgba(0,0,0,0.8)] backdrop-blur-sm">
+          {icon && <span className="mr-1 opacity-70">{icon}</span>}
           {ambientText}
         </div>
         <div
           className="mx-auto h-0 w-0"
           style={{
-            borderLeft: "5px solid transparent",
-            borderRight: "5px solid transparent",
-            borderTop: "5px solid rgba(0,0,0,0.8)",
+            borderLeft: "6px solid transparent",
+            borderRight: "6px solid transparent",
+            borderTop: "6px solid rgba(0,0,0,0.8)",
           }}
         />
       </div>

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import paradiseRaw from "@/config/paradise.office.json";
 import dontcallRaw from "@/config/dontcall.office.json";
 import operationsRaw from "@/config/operations.office.json";
+import launchosRaw from "@/config/launchos.office.json";
 import stationRaw from "@/config/station.json";
 import type {
   OfficeConfig,
@@ -27,9 +28,10 @@ const offices: Record<string, OfficeConfig> = {
   paradise: paradiseRaw as OfficeConfig,
   dontcall: dontcallRaw as OfficeConfig,
   operations: operationsRaw as OfficeConfig,
+  launchos: launchosRaw as OfficeConfig,
 };
 const station = stationRaw as StationConfig;
-const order = ["operations", "paradise", "dontcall"] as const;
+const order = ["operations", "paradise", "dontcall", "launchos"] as const;
 type OfficeSlug = (typeof order)[number];
 
 const ROSTER_POLL_MS = 5_000;
@@ -41,6 +43,7 @@ type RosterEntry = {
     name: string;
     role: string;
     isReal: boolean;
+    isHead?: boolean;
     model: string | null;
   };
   current: {
@@ -53,7 +56,20 @@ type RosterEntry = {
     inputQuestion: string | null;
   } | null;
   queueDepth: number;
+  activeDelegations?: number;
 };
+
+/** Maps an agent role string to a role icon emoji. */
+function roleIcon(role: string): string | undefined {
+  const r = role.toLowerCase();
+  if (/design|visual|art|creative/.test(r)) return "🎨";
+  if (/engineer|infra|deploy|environment/.test(r)) return "⚙️";
+  if (/bug|patch|fix/.test(r)) return "🔧";
+  if (/director|lead|head/.test(r)) return "📋";
+  if (/sales|marketing|promo/.test(r)) return "📢";
+  if (/monitor|watch/.test(r)) return "👁";
+  return undefined;
+}
 
 export default function Home() {
   return (
@@ -109,7 +125,19 @@ function HomeInner() {
       }))
       .filter((r) => r.runId);
   }, [rosterEntries]);
-  const ambientLines = useAmbientStream(activeRuns, focusedTab?.agentId ?? null);
+  // Agent IDs (not desk IDs) that are currently busy — passed to useAmbientStream for thinking placeholders
+  const busyAgentIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of rosterEntries ?? []) {
+      const st = e.current?.runStatus;
+      if (st === "running" || st === "starting" || st === "awaiting_input") {
+        s.add(e.agent.id);
+      }
+    }
+    return s;
+  }, [rosterEntries]);
+
+  const ambientLines = useAmbientStream(activeRuns, focusedTab?.agentId ?? null, busyAgentIds);
 
   // Context usage for ⚠ overlay — poll inspector for running agents
   const [contextUsage, setContextUsage] = useState<
@@ -162,7 +190,7 @@ function HomeInner() {
   // Restore sidebar slug + desk selection from localStorage on mount
   useEffect(() => {
     const stored = localStorage.getItem("ri-office") as OfficeSlug | null;
-    if (stored === "paradise" || stored === "dontcall" || stored === "operations") {
+    if (stored === "paradise" || stored === "dontcall" || stored === "operations" || stored === "launchos") {
       setSidebarSlug(stored);
       const storedDesk = localStorage.getItem(`ri-desk-${stored}`);
       if (storedDesk) setSelectedDeskId(storedDesk);
@@ -170,7 +198,7 @@ function HomeInner() {
     const storedFocus = localStorage.getItem(
       "ri-focus",
     ) as OfficeSlug | "overview" | null;
-    if (storedFocus === "paradise" || storedFocus === "dontcall" || storedFocus === "operations") {
+    if (storedFocus === "paradise" || storedFocus === "dontcall" || storedFocus === "operations" || storedFocus === "launchos") {
       setFocusedModule(storedFocus);
     }
   }, []);
@@ -293,9 +321,37 @@ function HomeInner() {
         m.set(e.agent.deskId, "awaiting_input");
       } else if (c.runStatus === "done" && !c.acknowledgedAt) {
         m.set(e.agent.deskId, "done_unacked");
+      } else if (c.runStatus === "error") {
+        m.set(e.agent.deskId, "error");
       }
     }
     return m;
+  }, [rosterEntries]);
+
+  // Map of deskId → count of active child runs this agent delegated.
+  // Drives satellite dots around the delegator's sprite.
+  const delegationsByDesk = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of rosterEntries ?? []) {
+      const n = e.activeDelegations ?? 0;
+      if (n > 0) m.set(e.agent.deskId, n);
+    }
+    return m;
+  }, [rosterEntries]);
+
+  // Beam lines: active delegation pairs as {fromDeskId, toDeskId}.
+  // Build a deskId lookup from agentId first.
+  const delegationLinks = useMemo(() => {
+    const agentToDeskId = new Map<string, string>();
+    for (const e of rosterEntries ?? []) agentToDeskId.set(e.agent.id, e.agent.deskId);
+    const links: { fromDeskId: string; toDeskId: string }[] = [];
+    for (const e of rosterEntries ?? []) {
+      const delegatorAgentId = (e as { delegatedByAgentId?: string | null }).delegatedByAgentId;
+      if (!delegatorAgentId) continue;
+      const fromDeskId = agentToDeskId.get(delegatorAgentId);
+      if (fromDeskId) links.push({ fromDeskId, toDeskId: e.agent.deskId });
+    }
+    return links;
   }, [rosterEntries]);
 
   const deskRunStatus = useMemo(() => {
@@ -598,6 +654,8 @@ function HomeInner() {
               focusedModule={focusedModule}
               busyDeskIds={busyDeskIds}
               agentStatus={agentStatus}
+              delegationsByDesk={delegationsByDesk}
+              delegationLinks={delegationLinks}
               selectedDeskId={selectedDeskId}
               onDeskSelect={(deskId) => selectDesk(deskId)}
               onAgentClick={handleAgentClick}
@@ -605,7 +663,7 @@ function HomeInner() {
               onAgentMove={handleAgentMove}
               onModuleFocus={(slug) => focusModule(slug as OfficeSlug)}
               onWarRoomClick={(slug) => {
-                if (slug === "paradise" || slug === "dontcall" || slug === "operations") {
+                if (slug === "paradise" || slug === "dontcall" || slug === "operations" || slug === "launchos") {
                   const office = offices[slug];
                   openWarRoom(slug, office ? `${office.name} War Room` : "War Room");
                 }
@@ -674,6 +732,20 @@ function HomeInner() {
             {Array.from(ambientLines.values()).map((line) => {
               const pos = agentPositionsRef.current.get(line.agentId);
               if (!pos) return null;
+              const agentEntry = (rosterEntries ?? []).find((e) => e.agent.id === line.agentId);
+              const icon = agentEntry ? roleIcon(agentEntry.agent.role) : undefined;
+              if (line.status === "thinking") {
+                return (
+                  <SpriteBubble
+                    key={`ambient:${line.agentId}`}
+                    mode="thinking"
+                    x={pos.clientX}
+                    y={pos.clientY}
+                    containerRef={officeContainerRef}
+                    onDismiss={() => {}} // auto-dismisses itself
+                  />
+                );
+              }
               return (
                 <SpriteBubble
                   key={`ambient:${line.agentId}`}
@@ -681,6 +753,7 @@ function HomeInner() {
                   x={pos.clientX}
                   y={pos.clientY}
                   text={line.lastLine}
+                  icon={icon}
                   containerRef={officeContainerRef}
                   onDismiss={() => {}} // ambient auto-dismisses itself
                 />

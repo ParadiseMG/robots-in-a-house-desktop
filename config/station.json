@@ -2,9 +2,10 @@
   "slug": "paradise-station",
   "name": "Paradise Station",
   "modules": [
-    { "office": "operations", "offsetX": 900, "offsetY": -500, "accent": "#10b981" },
-    { "office": "paradise", "offsetX": 0,    "offsetY": 0, "accent": "#f5c842" },
-    { "office": "dontcall", "offsetX": 1400, "offsetY": 0, "accent": "#f59e0b" }
+    { "office": "operations", "offsetX": 900, "offsetY": -600, "accent": "#2674d4" },
+    { "office": "paradise", "offsetX": 0, "offsetY": 0, "accent": "#f5c842" },
+    { "office": "dontcall", "offsetX": 1400, "offsetY": 0, "accent": "#f59e0b" },
+    { "office": "launchos", "offsetX": 2400, "offsetY": -600, "accent": "#10b981" }
   ],
   "background": { "kind": "starfield", "seed": 1, "density": 0.0008 }
 }

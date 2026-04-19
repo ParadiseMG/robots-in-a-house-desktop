@@ -5,7 +5,8 @@
 
 export const MODEL_MAX_TOKENS: Record<string, number> = {
   "claude-opus-4-6": 200_000,
-  "claude-sonnet-4-5": 1_000_000,
+  "claude-sonnet-4-5": 200_000,
+  "claude-sonnet-4-20250514": 200_000,
   "claude-haiku-4-5-20251001": 200_000,
 };
 

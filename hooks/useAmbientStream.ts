@@ -7,6 +7,7 @@ export type AmbientLine = {
   deskId: string;
   lastLine: string;
   ts: number;
+  status: "thinking" | "text";
 };
 
 type StreamEvent =
@@ -20,15 +21,57 @@ type ActiveRun = {
   runId: string;
 };
 
+/** Friendly label for common tool-call patterns in assistant text. */
+function friendlyLine(raw: string): string {
+  const t = raw.toLowerCase();
+  if (/\bread\b|reading/.test(t)) return "reading files...";
+  if (/\bedit\b|editing/.test(t)) return "editing code...";
+  if (/\bgrep\b|searching/.test(t)) return "searching...";
+  if (/\bbash\b|running/.test(t)) return "running command...";
+  const trimmed = raw.length > 80 ? raw.slice(0, 80) + "…" : raw;
+  return trimmed;
+}
+
 /**
  * Subscribes to SSE streams for all active runs (not the focused tab).
  * Emits the last line of assistant text per agent for ambient bubble display.
+ * Also emits a "thinking" placeholder for busy agents with no text yet.
  */
 export function useAmbientStream(
   activeRuns: ActiveRun[],
   focusedAgentId: string | null,
+  busyAgentIds: ReadonlySet<string> = new Set(),
 ): Map<string, AmbientLine> {
   const [lines, setLines] = useState<Map<string, AmbientLine>>(new Map());
+
+  // Inject thinking placeholders for busy agents that have no text yet
+  useEffect(() => {
+    const nonFocusedBusy = activeRuns.filter(
+      (r) => r.agentId !== focusedAgentId && busyAgentIds.has(r.agentId),
+    );
+    if (nonFocusedBusy.length === 0) return;
+    setLines((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const r of nonFocusedBusy) {
+        if (!next.has(r.agentId)) {
+          next.set(r.agentId, {
+            agentId: r.agentId,
+            deskId: r.deskId,
+            lastLine: "...",
+            ts: Date.now(),
+            status: "thinking",
+          });
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [
+    activeRuns.map((r) => `${r.runId}:${r.agentId}`).sort().join(","),
+    focusedAgentId,
+    [...busyAgentIds].sort().join(","),
+  ]);
 
   useEffect(() => {
     // Only stream for non-focused agents
@@ -47,18 +90,20 @@ export function useAmbientStream(
           if (msg.kind === "assistant" && msg.payload.text) {
             const text = msg.payload.text;
             // Take the last non-empty line
-            const lastLine = text
+            const rawLine = text
               .split("\n")
               .map((l) => l.trim())
               .filter(Boolean)
               .pop() ?? text.slice(-120);
+            const lastLine = friendlyLine(rawLine);
             setLines((prev) => {
               const next = new Map(prev);
               next.set(target.agentId, {
                 agentId: target.agentId,
                 deskId: target.deskId,
-                lastLine: lastLine.length > 80 ? lastLine.slice(0, 80) + "…" : lastLine,
+                lastLine,
                 ts: Date.now(),
+                status: "text",
               });
               return next;
             });

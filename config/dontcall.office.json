@@ -18,15 +18,19 @@
       "tint": "#d97706",
       "tintStrength": 0.15
     },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [6, 35],
+      "monitor": [14, 30]
+    },
     "premadeRoom": {
       "layers": [
-        "dontcall_museum_room3_layer1.png",
-        "dontcall_museum_room3_layer2.png"
+        "dontcall_neon_lounge_layer1.png"
       ],
-      "pixelWidth": 272,
-      "pixelHeight": 336,
+      "pixelWidth": 384,
+      "pixelHeight": 288,
       "sourceTileSize": 16,
-      "characterDepthIndex": 2
+      "characterDepthIndex": 1
     }
   },
   "tile": {
@@ -34,9 +38,9 @@
     "h": 32
   },
   "grid": {
-    "cols": 17,
-    "rows": 21,
-    "_comment": "Source is 272x336 — exactly 17x21 tiles at 16px. Perfect alignment, no padding needed."
+    "cols": 24,
+    "rows": 18,
+    "_comment": "Night rooftop \u2014 384x288 source (24x18 tiles at 16px, 2x scale). Parapet border 1 tile. Extra cols 16-23 and rows 16-17 are open rooftop for wandering."
   },
   "rooms": [
     {
@@ -46,7 +50,7 @@
       "gridY": 4,
       "w": 5,
       "h": 6,
-      "_comment": "Left corridor — open walkway cols 1-5, rows 4-9 between left display cases"
+      "_comment": "Left corridor \u2014 open walkway cols 1-5, rows 4-9 between left display cases"
     },
     {
       "id": "dispatch",
@@ -55,7 +59,7 @@
       "gridY": 4,
       "w": 5,
       "h": 6,
-      "_comment": "Right corridor — open walkway cols 11-15, rows 4-9 between right display cases"
+      "_comment": "Right corridor \u2014 open walkway cols 11-15, rows 4-9 between right display cases"
     },
     {
       "id": "watch",
@@ -64,7 +68,7 @@
       "gridY": 9,
       "w": 6,
       "h": 4,
-      "_comment": "Center upper — broad open zone cols 6-11, rows 9-12"
+      "_comment": "Center upper \u2014 broad open zone cols 6-11, rows 9-12"
     },
     {
       "id": "command",
@@ -73,7 +77,7 @@
       "gridY": 12,
       "w": 6,
       "h": 4,
-      "_comment": "Center lower — open zone cols 6-11, rows 12-15",
+      "_comment": "Center lower \u2014 open zone cols 6-11, rows 12-15",
       "warRoom": {
         "gridX": 10,
         "gridY": 5
@@ -82,82 +86,57 @@
   ],
   "desks": [
     {
-      "id": "desk-design-chief",
-      "roomId": "watch",
-      "gridX": 5,
-      "gridY": 5,
-      "facing": "S",
-      "_comment": "Center watch zone — design chief for robots-in-a-house"
-    },
-    {
       "id": "desk-foreman",
       "roomId": "command",
-      "gridX": 9,
-      "gridY": 5,
+      "gridX": 11,
+      "gridY": 9,
       "facing": "S"
     },
     {
-      "id": "desk-closer",
-      "roomId": "ops",
-      "gridX": 3,
-      "gridY": 6,
-      "facing": "S",
-      "_comment": "Left corridor — sales/signup bot"
+      "id": "desk-ledger",
+      "roomId": "command",
+      "gridX": 19,
+      "gridY": 4,
+      "facing": "S"
     },
     {
-      "id": "desk-desk",
-      "roomId": "ops",
-      "gridX": 3,
-      "gridY": 10,
-      "facing": "S",
-      "_comment": "Left corridor — customer service bot"
+      "id": "desk-beacon",
+      "roomId": "command",
+      "gridX": 4,
+      "gridY": 2,
+      "facing": "S"
     },
     {
-      "id": "desk-patch",
-      "roomId": "dispatch",
-      "gridX": 13,
-      "gridY": 6,
-      "facing": "S",
-      "_comment": "Right corridor — provider ops + billing"
+      "id": "desk-pitch",
+      "roomId": "command",
+      "gridX": 1,
+      "gridY": 4,
+      "facing": "S"
     },
     {
-      "id": "desk-wire",
-      "roomId": "dispatch",
-      "gridX": 14,
-      "gridY": 10,
-      "facing": "S",
-      "_comment": "Right corridor — infrastructure"
+      "id": "desk-anchor",
+      "roomId": "command",
+      "gridX": 2,
+      "gridY": 9,
+      "facing": "S"
     },
     {
-      "id": "desk-pulse",
-      "roomId": "watch",
-      "gridX": 9,
-      "gridY": 12,
+      "id": "desk-forge",
+      "roomId": "command",
+      "gridX": 20,
+      "gridY": 13,
+      "facing": "S"
+    },
+    {
+      "id": "desk-rivet",
+      "roomId": "command",
+      "gridX": 4,
+      "gridY": 14,
       "facing": "S",
-      "_comment": "Center watch — monitoring + reporting"
+      "label": "Rivet"
     }
   ],
   "agents": [
-    {
-      "id": "design-chief",
-      "deskId": "desk-design-chief",
-      "name": "Pixel",
-      "role": "Design",
-      "spritePack": "limezu/office/08",
-      "visual": {
-        "premade": "santa_claus.png"
-      },
-      "isReal": true,
-      "cwd": "agent-workspaces/dontcall/design-chief",
-      "allowedTools": [
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "Bash"
-      ]
-    },
     {
       "id": "foreman",
       "deskId": "desk-foreman",
@@ -172,114 +151,160 @@
       "cwd": "agent-workspaces/dontcall/foreman",
       "allowedTools": [
         "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "mcp__robots-brand__create_agent",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6"
+    },
+    {
+      "id": "ledger",
+      "deskId": "desk-ledger",
+      "name": "Ledger",
+      "role": "Head of Finance",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_14.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/dontcall/ledger",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6",
+      "isDeptHead": true
+    },
+    {
+      "id": "beacon",
+      "deskId": "desk-beacon",
+      "name": "Beacon",
+      "role": "Head of Marketing",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_04.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/dontcall/beacon",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6",
+      "isDeptHead": true
+    },
+    {
+      "id": "pitch",
+      "deskId": "desk-pitch",
+      "name": "Pitch",
+      "role": "Head of Sales",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_06.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/dontcall/pitch",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6",
+      "isDeptHead": true
+    },
+    {
+      "id": "anchor",
+      "deskId": "desk-anchor",
+      "name": "Anchor",
+      "role": "Head of Customer",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_02.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/dontcall/anchor",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6",
+      "isDeptHead": true
+    },
+    {
+      "id": "forge",
+      "deskId": "desk-forge",
+      "name": "Forge",
+      "role": "Head of Engineering",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_11.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/dontcall/forge",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6",
+      "isDeptHead": true
+    },
+    {
+      "id": "rivet",
+      "name": "Rivet",
+      "role": "Implementation Builder",
+      "deskId": "desk-rivet",
+      "spritePack": "limezu/office/auto",
+      "isReal": true,
+      "isHead": false,
+      "cwd": "agent-workspaces/dontcall/rivet",
+      "allowedTools": [
+        "Read",
         "Write",
         "Edit",
         "Grep",
         "Glob",
         "Bash",
-        "mcp__robots-brand__create_agent"
+        "WebSearch",
+        "WebFetch"
       ],
-      "model": "claude-opus-4-6"
-    },
-    {
-      "id": "closer",
-      "deskId": "desk-closer",
-      "name": "Ink",
-      "role": "Sales Bot",
-      "spritePack": "limezu/office/01",
       "visual": {
         "premade": "premade_04.png"
       },
-      "isReal": true,
-      "cwd": "agent-workspaces/dontcall/closer",
-      "allowedTools": [
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "Bash"
-      ]
-    },
-    {
-      "id": "desk-agent",
-      "deskId": "desk-desk",
-      "name": "Ack",
-      "role": "Customer Bot",
-      "spritePack": "limezu/office/02",
-      "visual": {
-        "premade": "premade_02.png"
-      },
-      "isReal": true,
-      "cwd": "agent-workspaces/dontcall/desk",
-      "allowedTools": [
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "Bash"
-      ]
-    },
-    {
-      "id": "patch",
-      "deskId": "desk-patch",
-      "name": "Bill",
-      "role": "Provider Ops",
-      "spritePack": "limezu/office/03",
-      "visual": {
-        "premade": "premade_14.png"
-      },
-      "isReal": true,
-      "cwd": "agent-workspaces/dontcall/patch",
-      "allowedTools": [
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "Bash"
-      ]
-    },
-    {
-      "id": "wire",
-      "deskId": "desk-wire",
-      "name": "Root",
-      "role": "Infrastructure",
-      "spritePack": "limezu/office/04",
-      "visual": {
-        "premade": "premade_11.png"
-      },
-      "isReal": true,
-      "cwd": "agent-workspaces/dontcall/wire",
-      "allowedTools": [
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "Bash"
-      ]
-    },
-    {
-      "id": "pulse",
-      "deskId": "desk-pulse",
-      "name": "Glitch",
-      "role": "Monitoring",
-      "spritePack": "limezu/office/05",
-      "visual": {
-        "premade": "premade_17.png"
-      },
-      "isReal": true,
-      "cwd": "agent-workspaces/dontcall/pulse",
-      "allowedTools": [
-        "Read",
-        "Write",
-        "Edit",
-        "Grep",
-        "Glob",
-        "Bash"
-      ]
+      "model": "claude-sonnet-4-20250514"
     }
   ]
 }

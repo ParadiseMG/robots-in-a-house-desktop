@@ -32,6 +32,19 @@ export type ThemeConfig = {
     floorTileIndex: [number, number]; // [col, row] on tilesheet
     wallTileIndex?: [number, number];
   };
+  // Visible desk furniture: colored chair behind agent + monitor in front.
+  deskStyle?: {
+    /** Tilesheet path relative to /public/sprites/interiors/ */
+    tilesheet: string;
+    /** Chair tile [col, row] — top-left of a 2x2 tile block */
+    chair: number[];
+    /** Monitor tile [col, row] — top-left of a 2x1 tile block */
+    monitor: number[];
+    /** "tile" = use tilesheet chair, "towel" = draw a pixel-art beach towel */
+    chairType?: "tile" | "towel";
+    /** Towel stripe color (hex string like "#f59e0b") — used when chairType is "towel" */
+    towelColor?: string;
+  };
   // Premade room: render pre-composed layer PNGs instead of per-tile floor.
   // Takes precedence over `interior` when both are set.
   premadeRoom?: {
@@ -73,7 +86,8 @@ export type AgentConfig = {
   cwd?: string;
   allowedTools?: string[];
   model?: string;        // Claude model id, e.g. "claude-opus-4-6"; omit for SDK default (Sonnet)
-  isHead?: boolean;      // brand head — gets create_agent tool + Build Department UI
+  isHead?: boolean;      // Director — brand head, gets create_agent tool + Build Department UI. One per office.
+  isDeptHead?: boolean;  // Department Head — leads a function (Finance, Marketing, Engineering, etc.). Typically Opus.
 };
 
 /**
@@ -81,7 +95,7 @@ export type AgentConfig = {
  * - awaiting_input: agent called request_input and is blocked on a human reply
  * - done_unacked:   latest run finished and the user hasn't opened the inspector yet
  */
-export type IndicatorKind = "awaiting_input" | "done_unacked";
+export type IndicatorKind = "awaiting_input" | "done_unacked" | "error";
 
 export type OfficeConfig = {
   slug: string;

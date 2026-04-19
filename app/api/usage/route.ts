@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
-import { db } from "@/server/db";
+import { db, getAllRateLimits } from "@/server/db";
 
 export const dynamic = "force-dynamic";
 
 const WINDOW_MS = 5 * 60 * 60 * 1000; // 5 hours
-const LIMIT_TOKENS = 500_000;
 
 export async function GET() {
   const since = Date.now() - WINDOW_MS;
@@ -32,6 +31,11 @@ export async function GET() {
 
   const tokens = row.input_tokens + row.output_tokens;
 
+  // Pull real rate limit data from Anthropic (captured from SDK events)
+  const rateLimits = getAllRateLimits();
+  const fiveHour = rateLimits.find((r) => r.key === "five_hour");
+  const sevenDay = rateLimits.find((r) => r.key === "seven_day");
+
   return NextResponse.json({
     windowMs: WINDOW_MS,
     since,
@@ -42,7 +46,22 @@ export async function GET() {
     outputTokens: row.output_tokens,
     cacheReadTokens: row.cache_read_tokens,
     cacheCreationTokens: row.cache_creation_tokens,
-    limit: LIMIT_TOKENS,
-    pct: Math.min(1, tokens / LIMIT_TOKENS),
+    // Real utilization from Anthropic (null if no data yet)
+    fiveHour: fiveHour
+      ? {
+          utilization: fiveHour.utilization,
+          resetsAt: fiveHour.resets_at,
+          status: fiveHour.status,
+          updatedAt: fiveHour.updated_at,
+        }
+      : null,
+    sevenDay: sevenDay
+      ? {
+          utilization: sevenDay.utilization,
+          resetsAt: sevenDay.resets_at,
+          status: sevenDay.status,
+          updatedAt: sevenDay.updated_at,
+        }
+      : null,
   });
 }

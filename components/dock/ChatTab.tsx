@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import MessageList, { type ChatMessage } from "@/components/dock/MessageList";
 import ToolCallLine from "@/components/dock/ToolCallLine";
 import AwaitingInputForm from "@/components/dock/AwaitingInputForm";
@@ -53,6 +53,11 @@ export default function ChatTab({
   const [chatText, setChatText] = useState("");
   const [chatPending, setChatPending] = useState(false);
   const [refetchNonce, setRefetchNonce] = useState(0);
+  const [attachments, setAttachments] = useState<Array<{ name: string; path: string; type: string }>>([]);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const latestAgentId = useRef(agentId);
   latestAgentId.current = agentId;
 
@@ -134,7 +139,7 @@ export default function ChatTab({
           if (msg.payload.status === "starting" || msg.payload.status === "running") {
             sawLive = true;
           }
-          if (msg.payload.status === "done" || msg.payload.status === "error") {
+          if (msg.payload.status === "done" || msg.payload.status === "error" || msg.payload.status === "interrupted") {
             es.close();
             if (sawLive) setRefetchNonce((n) => n + 1);
           }
@@ -148,22 +153,96 @@ export default function ChatTab({
     return () => { es.close(); };
   }, [runId, isLive]);
 
+  const uploadFiles = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+    setUploading(true);
+    try {
+      const uploaded = await Promise.all(files.map(async (file) => {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/api/upload", { method: "POST", body: fd });
+        if (!res.ok) throw new Error(`Upload failed: ${file.name}`);
+        return (await res.json()) as { name: string; path: string; type: string };
+      }));
+      setAttachments((prev) => [...prev, ...uploaded]);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }, []);
+
+  const onFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    await uploadFiles(Array.from(e.target.files ?? []));
+  }, [uploadFiles]);
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setDragOver(true);
+  }, []);
+
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false);
+  }, []);
+
+  const onDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length) await uploadFiles(files);
+  }, [uploadFiles]);
+
   const onChat = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = chatText.trim();
     const agent = inspection?.agent;
-    if (!trimmed || !agent || chatPending) return;
+    if ((!trimmed && attachments.length === 0) || !agent || chatPending) return;
     setChatPending(true);
     try {
+      // Build prompt: prepend file references before user text
+      let prompt = trimmed;
+      if (attachments.length > 0) {
+        const fileBlock = attachments
+          .map((a) => `[Attached file: ${a.name} — path: ${a.path}]`)
+          .join("\n");
+        prompt = fileBlock + (trimmed ? "\n\n" + trimmed : "");
+      }
       await fetch("/api/quick-run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ officeSlug, agentId, prompt: trimmed }),
+        body: JSON.stringify({ officeSlug, agentId, prompt }),
       });
       setChatText("");
+      setAttachments([]);
       setRefetchNonce((n) => n + 1);
     } finally {
       setChatPending(false);
+    }
+  };
+
+  const onNewChat = async () => {
+    if (resetting || isLive) return;
+    setResetting(true);
+    try {
+      const res = await fetch("/api/break", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ officeSlug, agentId }),
+      });
+      if (res.ok) {
+        setMessages([]);
+        setLiveText("");
+        setLiveTools([]);
+        setLiveStatus(null);
+        setChatText("");
+        setAttachments([]);
+        // Give the break run a moment to start, then refetch
+        setTimeout(() => setRefetchNonce((n) => n + 1), 1500);
+      }
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -172,7 +251,31 @@ export default function ChatTab({
   const busy = chatPending || isLive || awaitingInput;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div
+      className={`relative flex min-h-0 flex-1 flex-col transition-colors ${dragOver ? "bg-sky-500/5" : ""}`}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {/* Drop overlay */}
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center rounded border-2 border-dashed border-sky-400/60 bg-sky-500/10">
+          <span className="font-mono text-xs text-sky-300">drop to attach</span>
+        </div>
+      )}
+      {/* New chat button — top right */}
+      {isReal && (
+        <button
+          type="button"
+          onClick={onNewChat}
+          disabled={resetting || isLive}
+          title="Start a new conversation (agent saves memory, then resets)"
+          className="absolute right-2 top-2 z-20 rounded border border-white/15 bg-black/70 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-white/40 backdrop-blur transition hover:border-white/30 hover:text-white/70 disabled:opacity-30"
+        >
+          {resetting ? "resetting…" : "new chat"}
+        </button>
+      )}
+
       {/* Message area */}
       <MessageList
         messages={messages}
@@ -197,29 +300,71 @@ export default function ChatTab({
       {isReal && (
         <form
           onSubmit={onChat}
-          className="flex items-center gap-1 border-t border-white/10 bg-black/40 p-2"
+          className="flex flex-col gap-1 border-t border-white/10 bg-black/40 p-2"
         >
-          <input
-            type="text"
-            value={chatText}
-            onChange={(e) => setChatText(e.target.value)}
-            placeholder={
-              awaitingInput
-                ? "reply above…"
-                : busy
-                ? "agent is working…"
-                : `talk to ${agentName}…`
-            }
-            disabled={busy}
-            className="flex-1 rounded border border-white/20 bg-black/60 px-2 py-1 font-mono text-xs outline-none focus:border-white/40 disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={busy || !chatText.trim()}
-            className="rounded border border-white/20 bg-white/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-white hover:bg-white/20 disabled:opacity-40"
-          >
-            {chatPending ? "…" : "send"}
-          </button>
+          {/* Attachment chips */}
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {attachments.map((a, i) => (
+                <span
+                  key={i}
+                  className="flex items-center gap-1 rounded bg-white/10 px-2 py-0.5 font-mono text-[10px] text-white/70"
+                >
+                  <span>📎</span>
+                  <span className="max-w-[120px] truncate">{a.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                    className="ml-0.5 text-white/40 hover:text-white"
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center gap-1">
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={onFileChange}
+            />
+            {/* Attach button */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || uploading}
+              title="Attach file"
+              className="shrink-0 rounded border border-white/20 bg-white/5 px-1.5 py-1 text-xs text-white/50 hover:bg-white/10 hover:text-white/80 disabled:opacity-40"
+            >
+              {uploading ? "⏳" : "📎"}
+            </button>
+            <input
+              type="text"
+              value={chatText}
+              onChange={(e) => setChatText(e.target.value)}
+              placeholder={
+                awaitingInput
+                  ? "reply above…"
+                  : busy
+                  ? "agent is working…"
+                  : `talk to ${agentName}…`
+              }
+              disabled={busy}
+              className="flex-1 rounded border border-white/20 bg-black/60 px-2 py-1 font-mono text-xs outline-none focus:border-white/40 disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={busy || (!chatText.trim() && attachments.length === 0)}
+              className="rounded border border-white/20 bg-white/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-white hover:bg-white/20 disabled:opacity-40"
+            >
+              {chatPending ? "…" : "send"}
+            </button>
+          </div>
         </form>
       )}
     </div>

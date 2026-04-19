@@ -4,7 +4,7 @@ import path from "node:path";
 import { db } from "@/server/db";
 import type { OfficeConfig } from "@/lib/office-types";
 
-const VALID_SLUGS = new Set(["paradise", "dontcall", "operations"]);
+const VALID_SLUGS = new Set(["paradise", "dontcall", "operations", "launchos"]);
 
 async function loadOffice(slug: string): Promise<OfficeConfig | null> {
   if (!VALID_SLUGS.has(slug)) return null;

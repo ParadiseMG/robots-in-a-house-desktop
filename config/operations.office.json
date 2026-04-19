@@ -2,29 +2,39 @@
   "slug": "operations",
   "name": "Ops Center",
   "theme": {
-    "floor": "#2a2a3d",
-    "floorAlt": "#252538",
-    "wall": "#1a1a2e",
-    "deskTop": "#3a3a5c",
-    "deskSide": "#2d2d4a",
-    "accent": "#10b981",
-    "highlight": "#34d399",
-    "bg": "#0a0a1a",
+    "floor": "#303034",
+    "floorAlt": "#3c3c42",
+    "wall": "#18181c",
+    "deskTop": "#4a4a50",
+    "deskSide": "#303034",
+    "accent": "#2674d4",
+    "highlight": "#5aa0ff",
+    "bg": "#1a2030",
     "paletteFilter": {
-      "hue": -10,
-      "saturation": 1,
-      "brightness": 1.3,
-      "contrast": 1
+      "hue": -5,
+      "saturation": 0.9,
+      "brightness": 1,
+      "contrast": 1.05
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [
+        4,
+        33
+      ],
+      "monitor": [
+        12,
+        30
+      ]
     },
     "premadeRoom": {
       "layers": [
-        "dontcall_tv_studio_layer1.png",
-        "dontcall_tv_studio_layer2.png"
+        "ops_combined_layer1.png"
       ],
-      "pixelWidth": 176,
-      "pixelHeight": 160,
+      "pixelWidth": 656,
+      "pixelHeight": 256,
       "sourceTileSize": 16,
-      "characterDepthIndex": 2
+      "characterDepthIndex": 1
     }
   },
   "tile": {
@@ -32,8 +42,9 @@
     "h": 32
   },
   "grid": {
-    "cols": 11,
-    "rows": 10
+    "cols": 41,
+    "rows": 16,
+    "_comment": "656x256 source (41x16 tiles at 16px, 2x scale). Mission control floor left (cols 0-23), workspace room right (cols 24-40). Wander disabled for ops."
   },
   "rooms": [
     {
@@ -53,8 +64,8 @@
     {
       "id": "desk-conductor",
       "roomId": "control",
-      "gridX": 7,
-      "gridY": 3,
+      "gridX": 12,
+      "gridY": 2,
       "facing": "S"
     },
     {
@@ -67,15 +78,15 @@
     {
       "id": "desk-designer",
       "roomId": "control",
-      "gridX": 5,
-      "gridY": 4,
+      "gridX": 16,
+      "gridY": 3,
       "facing": "S"
     },
     {
       "id": "desk-patcher",
       "roomId": "control",
-      "gridX": 9,
-      "gridY": 7,
+      "gridX": 15,
+      "gridY": 10,
       "facing": "S"
     },
     {
@@ -83,6 +94,48 @@
       "roomId": "control",
       "gridX": 1,
       "gridY": 5,
+      "facing": "S"
+    },
+    {
+      "id": "desk-vault",
+      "roomId": "control",
+      "gridX": 5,
+      "gridY": 7,
+      "facing": "S"
+    },
+    {
+      "id": "desk-hammer",
+      "roomId": "control",
+      "gridX": 6,
+      "gridY": 10,
+      "facing": "S"
+    },
+    {
+      "id": "desk-bob",
+      "roomId": "control",
+      "gridX": 20,
+      "gridY": 11,
+      "facing": "S"
+    },
+    {
+      "id": "desk-thing2",
+      "roomId": "control",
+      "gridX": 21,
+      "gridY": 1,
+      "facing": "S"
+    },
+    {
+      "id": "desk-squashisha",
+      "roomId": "control",
+      "gridX": 13,
+      "gridY": 10,
+      "facing": "S"
+    },
+    {
+      "id": "desk-shell",
+      "roomId": "control",
+      "gridX": 8,
+      "gridY": 1,
       "facing": "S"
     }
   ],
@@ -101,11 +154,13 @@
       "cwd": "agent-workspaces/operations/conductor",
       "allowedTools": [
         "Read",
-        "Write",
         "Edit",
+        "Write",
         "Grep",
         "Glob",
-        "Bash"
+        "Bash",
+        "WebSearch",
+        "WebFetch"
       ],
       "model": "claude-opus-4-6"
     },
@@ -123,12 +178,15 @@
       "cwd": "agent-workspaces/operations/deploy",
       "allowedTools": [
         "Read",
-        "Write",
         "Edit",
+        "Write",
         "Grep",
         "Glob",
-        "Bash"
-      ]
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6"
     },
     {
       "id": "designer",
@@ -144,12 +202,15 @@
       "cwd": "agent-workspaces/operations/designer",
       "allowedTools": [
         "Read",
-        "Write",
         "Edit",
+        "Write",
         "Grep",
         "Glob",
-        "Bash"
-      ]
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6"
     },
     {
       "id": "patcher",
@@ -165,12 +226,15 @@
       "cwd": "agent-workspaces/operations/patcher",
       "allowedTools": [
         "Read",
-        "Write",
         "Edit",
+        "Write",
         "Grep",
         "Glob",
-        "Bash"
-      ]
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6"
     },
     {
       "id": "scape",
@@ -186,12 +250,154 @@
       "cwd": "agent-workspaces/operations/scape",
       "allowedTools": [
         "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6"
+    },
+    {
+      "id": "vault",
+      "deskId": "desk-vault",
+      "name": "Vault",
+      "role": "Security Engineer",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_03.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/operations/vault",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6"
+    },
+    {
+      "id": "hammer",
+      "deskId": "desk-hammer",
+      "name": "Hammer",
+      "role": "Implementation Builder",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_10.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/operations/hammer",
+      "allowedTools": [
+        "Read",
         "Write",
         "Edit",
         "Grep",
         "Glob",
-        "Bash"
+        "Bash",
+        "WebSearch",
+        "WebFetch"
       ]
+    },
+    {
+      "id": "bob",
+      "deskId": "desk-bob",
+      "name": "Bob",
+      "role": "Workspace Architect",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_17.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/operations/bob",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6"
+    },
+    {
+      "id": "thing2",
+      "deskId": "desk-thing2",
+      "name": "Thing 2",
+      "role": "Business Agent — Jobber EU",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_14.png"
+      },
+      "isReal": true,
+      "isHead": false,
+      "cwd": "agent-workspaces/operations/thing2",
+      "allowedTools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6"
+    },
+    {
+      "id": "squashisha",
+      "deskId": "desk-squashisha",
+      "name": "Squashisha",
+      "role": "Bug Fixer",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_06.png"
+      },
+      "isReal": true,
+      "isHead": false,
+      "cwd": "agent-workspaces/operations/squashisha",
+      "allowedTools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-sonnet-4-20250514"
+    },
+    {
+      "id": "shell",
+      "deskId": "desk-shell",
+      "name": "Shell",
+      "role": "Desktop App Engineer",
+      "spritePack": "limezu/office/auto",
+      "visual": {
+        "premade": "premade_15.png"
+      },
+      "isReal": true,
+      "cwd": "agent-workspaces/operations/shell",
+      "allowedTools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Grep",
+        "Glob",
+        "Bash",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "model": "claude-opus-4-6"
     }
   ]
 }

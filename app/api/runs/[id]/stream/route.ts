@@ -16,6 +16,8 @@ export async function GET(
     async start(controller) {
       let lastEventId = 0;
       let done = false;
+      const startedAt = Date.now();
+      const MAX_LIFETIME_MS = 30 * 60 * 1000; // 30 minutes
 
       const send = (data: unknown) => {
         if (closed) return;
@@ -40,7 +42,7 @@ export async function GET(
             lastEventId = r.id;
             const payload = JSON.parse(r.payload) as Record<string, unknown>;
             send({ id: r.id, ts: r.ts, kind: r.kind, payload });
-            if (r.kind === "status" && (payload.status === "done" || payload.status === "error")) {
+            if (r.kind === "status" && (payload.status === "done" || payload.status === "error" || payload.status === "interrupted")) {
               done = true;
             }
           }
@@ -49,6 +51,12 @@ export async function GET(
         }
         if (done) {
           send({ kind: "close" });
+          controller.close();
+          closed = true;
+          return;
+        }
+        if (Date.now() - startedAt > MAX_LIFETIME_MS) {
+          send({ kind: "timeout", message: "stream max lifetime exceeded" });
           controller.close();
           closed = true;
           return;

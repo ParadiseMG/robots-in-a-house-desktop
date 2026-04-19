@@ -3,7 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import type { OfficeConfig } from "@/lib/office-types";
 
-const VALID_SLUGS = ["paradise", "dontcall", "operations"] as const;
+const VALID_SLUGS = ["paradise", "dontcall", "operations", "launchos"] as const;
 type ValidSlug = (typeof VALID_SLUGS)[number];
 
 function isValidSlug(s: unknown): s is ValidSlug {

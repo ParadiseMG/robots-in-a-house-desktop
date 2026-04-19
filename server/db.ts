@@ -4,6 +4,7 @@ import { join } from "node:path";
 import paradiseRaw from "../config/paradise.office.json" with { type: "json" };
 import dontcallRaw from "../config/dontcall.office.json" with { type: "json" };
 import operationsRaw from "../config/operations.office.json" with { type: "json" };
+import launchosRaw from "../config/launchos.office.json" with { type: "json" };
 import type { OfficeConfig } from "../lib/office-types.js";
 
 const DB_DIR = join(process.cwd(), "data");
@@ -112,6 +113,15 @@ function migrate(d: Database.Database) {
       queued_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_prompt_queue_agent ON prompt_queue(agent_id, office_slug, queued_at);
+
+    CREATE TABLE IF NOT EXISTS rate_limit_state (
+      key TEXT PRIMARY KEY,
+      utilization REAL NOT NULL DEFAULT 0,
+      resets_at INTEGER,
+      status TEXT NOT NULL DEFAULT 'allowed',
+      rate_limit_type TEXT,
+      updated_at INTEGER NOT NULL
+    );
   `);
 
   // Idempotent column additions for agent_runs (pre-existing DBs)
@@ -143,6 +153,53 @@ function migrate(d: Database.Database) {
   if (!mcols.includes("synthesis_run_id")) {
     d.exec("ALTER TABLE meetings ADD COLUMN synthesis_run_id TEXT");
   }
+}
+
+export function upsertRateLimit(info: {
+  key: string;
+  utilization: number;
+  resetsAt?: number;
+  status: string;
+  rateLimitType?: string;
+}) {
+  db()
+    .prepare(
+      `INSERT INTO rate_limit_state (key, utilization, resets_at, status, rate_limit_type, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET
+         utilization = excluded.utilization,
+         resets_at = excluded.resets_at,
+         status = excluded.status,
+         rate_limit_type = excluded.rate_limit_type,
+         updated_at = excluded.updated_at`,
+    )
+    .run(info.key, info.utilization, info.resetsAt ?? null, info.status, info.rateLimitType ?? null, Date.now());
+}
+
+export function getRateLimit(key: string) {
+  return db()
+    .prepare("SELECT * FROM rate_limit_state WHERE key = ?")
+    .get(key) as {
+      key: string;
+      utilization: number;
+      resets_at: number | null;
+      status: string;
+      rate_limit_type: string | null;
+      updated_at: number;
+    } | undefined;
+}
+
+export function getAllRateLimits() {
+  return db()
+    .prepare("SELECT * FROM rate_limit_state ORDER BY key")
+    .all() as Array<{
+      key: string;
+      utilization: number;
+      resets_at: number | null;
+      status: string;
+      rate_limit_type: string | null;
+      updated_at: number;
+    }>;
 }
 
 export function getResumeSessionId(
@@ -200,6 +257,7 @@ const FALLBACK_OFFICES: Record<string, OfficeConfig> = {
   paradise: paradiseRaw as OfficeConfig,
   dontcall: dontcallRaw as OfficeConfig,
   operations: operationsRaw as OfficeConfig,
+  launchos: launchosRaw as OfficeConfig,
 };
 
 function loadOffice(officeSlug: string): OfficeConfig | null {
@@ -257,7 +315,7 @@ export type AgentRunRow = {
   agent_id: string;
   office_slug: string;
   session_id: string | null;
-  status: "starting" | "running" | "awaiting_input" | "done" | "error";
+  status: "starting" | "running" | "awaiting_input" | "done" | "error" | "interrupted";
   started_at: number;
   ended_at: number | null;
   last_token_at: number | null;
@@ -323,14 +381,17 @@ export function dequeuePrompt(
   officeSlug: string,
 ): PromptQueueRow | null {
   const d = db();
-  const row = d
-    .prepare(
-      "SELECT * FROM prompt_queue WHERE agent_id = ? AND office_slug = ? ORDER BY queued_at ASC LIMIT 1",
-    )
-    .get(agentId, officeSlug) as PromptQueueRow | undefined;
-  if (!row) return null;
-  d.prepare("DELETE FROM prompt_queue WHERE id = ?").run(row.id);
-  return row;
+  return d.transaction(() => {
+    const row = d
+      .prepare(
+        "SELECT * FROM prompt_queue WHERE agent_id = ? AND office_slug = ? ORDER BY queued_at ASC LIMIT 1",
+      )
+      .get(agentId, officeSlug) as PromptQueueRow | undefined;
+    if (!row) return null;
+    const deleted = d.prepare("DELETE FROM prompt_queue WHERE id = ?").run(row.id);
+    if (deleted.changes === 0) return null;
+    return row;
+  })();
 }
 
 /**
@@ -371,6 +432,187 @@ export function activeDelegationsByDelegator(
   const m = new Map<string, number>();
   for (const r of rows) m.set(r.id, r.n);
   return m;
+}
+
+/**
+ * Returns active delegation pairs for an office: [{delegatorId, delegateeId}].
+ * Used to draw beam lines from delegator sprite to delegate sprite.
+ */
+export function activeDelegationLinks(
+  officeSlug: string,
+): Array<{ delegatorId: string; delegateeId: string }> {
+  const rows = db()
+    .prepare(
+      `SELECT delegated_by_agent_id AS delegatorId, agent_id AS delegateeId
+       FROM agent_runs
+       WHERE office_slug = ?
+         AND delegated_by_agent_id IS NOT NULL
+         AND status IN ('starting', 'running', 'awaiting_input')`,
+    )
+    .all(officeSlug) as Array<{ delegatorId: string; delegateeId: string }>;
+  return rows;
+}
+
+/**
+ * Look up a delegated run for the caller. Returns enough to answer "is it
+ * done, and what did they say?" — status + last assistant text + final result
+ * + pending input question if any. Returns null if the run doesn't exist OR
+ * the caller isn't the delegator (authorization — you can only peek at your
+ * own delegations).
+ */
+export function getDelegationStatus(
+  runId: string,
+  delegatorAgentId: string,
+): {
+  runId: string;
+  agentId: string;
+  officeSlug: string;
+  status: "starting" | "running" | "awaiting_input" | "done" | "error" | "interrupted";
+  startedAt: number;
+  endedAt: number | null;
+  lastAssistantText: string | null;
+  finalResult: string | null;
+  error: string | null;
+  pendingQuestion: string | null;
+  taskTitle: string | null;
+} | null {
+  const d = db();
+  const run = d
+    .prepare(
+      `SELECT r.id, r.agent_id, r.office_slug, r.status, r.started_at, r.ended_at,
+              r.error, r.delegated_by_agent_id, r.assignment_id
+       FROM agent_runs r WHERE r.id = ?`,
+    )
+    .get(runId) as
+    | (Pick<
+        AgentRunRow,
+        | "id"
+        | "agent_id"
+        | "office_slug"
+        | "status"
+        | "started_at"
+        | "ended_at"
+        | "error"
+        | "delegated_by_agent_id"
+        | "assignment_id"
+      >)
+    | undefined;
+  if (!run) return null;
+  if (run.delegated_by_agent_id !== delegatorAgentId) return null;
+
+  // Last assistant text (most recent progress line)
+  const lastAssistant = d
+    .prepare(
+      `SELECT payload FROM run_events
+       WHERE run_id = ? AND kind = 'assistant'
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .get(runId) as { payload: string } | undefined;
+  let lastAssistantText: string | null = null;
+  if (lastAssistant) {
+    try {
+      const parsed = JSON.parse(lastAssistant.payload) as { text?: string };
+      lastAssistantText = parsed.text ?? null;
+    } catch {}
+  }
+
+  // Final result (from the 'done' status event)
+  let finalResult: string | null = null;
+  if (run.status === "done") {
+    const doneEvent = d
+      .prepare(
+        `SELECT payload FROM run_events
+         WHERE run_id = ? AND kind = 'status'
+         ORDER BY id DESC LIMIT 1`,
+      )
+      .get(runId) as { payload: string } | undefined;
+    if (doneEvent) {
+      try {
+        const parsed = JSON.parse(doneEvent.payload) as { result?: string };
+        finalResult = parsed.result ?? null;
+      } catch {}
+    }
+  }
+
+  // Pending question (if awaiting_input)
+  let pendingQuestion: string | null = null;
+  if (run.status === "awaiting_input") {
+    const q = d
+      .prepare(
+        `SELECT payload FROM run_events
+         WHERE run_id = ? AND kind = 'input_request'
+         ORDER BY id DESC LIMIT 1`,
+      )
+      .get(runId) as { payload: string } | undefined;
+    if (q) {
+      try {
+        const parsed = JSON.parse(q.payload) as { question?: string };
+        pendingQuestion = parsed.question ?? null;
+      } catch {}
+    }
+  }
+
+  // Task title (for delegator who lost track of what they sent)
+  const task = d
+    .prepare(
+      `SELECT t.title FROM tasks t
+       JOIN assignments a ON a.task_id = t.id
+       WHERE a.id = ? LIMIT 1`,
+    )
+    .get(run.assignment_id) as { title: string } | undefined;
+
+  return {
+    runId: run.id,
+    agentId: run.agent_id,
+    officeSlug: run.office_slug,
+    status: run.status,
+    startedAt: run.started_at,
+    endedAt: run.ended_at,
+    lastAssistantText,
+    finalResult,
+    error: run.error,
+    pendingQuestion,
+    taskTitle: task?.title ?? null,
+  };
+}
+
+/**
+ * List recent delegations dispatched by a given agent. Returns up to `limit`
+ * runs ordered newest first. Used when the delegator asks "what did I send
+ * out?" without a specific runId.
+ */
+export function listDelegationsBy(
+  delegatorAgentId: string,
+  officeSlug: string,
+  limit = 10,
+): Array<{
+  runId: string;
+  agentId: string;
+  status: AgentRunRow["status"];
+  startedAt: number;
+  endedAt: number | null;
+  taskTitle: string | null;
+}> {
+  const rows = db()
+    .prepare(
+      `SELECT r.id AS runId, r.agent_id AS agentId, r.status, r.started_at AS startedAt,
+              r.ended_at AS endedAt, t.title AS taskTitle
+       FROM agent_runs r
+       LEFT JOIN assignments a ON a.id = r.assignment_id
+       LEFT JOIN tasks t ON t.id = a.task_id
+       WHERE r.delegated_by_agent_id = ? AND r.office_slug = ?
+       ORDER BY r.started_at DESC
+       LIMIT ?`,
+    )
+    .all(delegatorAgentId, officeSlug, limit) as Array<{
+    runId: string;
+    agentId: string;
+    status: AgentRunRow["status"];
+    startedAt: number;
+    endedAt: number | null;
+    taskTitle: string | null;
+  }>;
+  return rows;
 }
 
 /** Count queued prompts for an agent. */

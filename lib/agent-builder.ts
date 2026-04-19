@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentConfig, DeskConfig, OfficeConfig } from "./office-types";
 
-const VALID_SLUGS = ["paradise", "dontcall", "operations"] as const;
+const VALID_SLUGS = ["paradise", "dontcall", "operations", "launchos"] as const;
 export type OfficeSlug = (typeof VALID_SLUGS)[number];
 
 export class AgentBuilderError extends Error {
@@ -121,7 +121,7 @@ export type CreateAgentResult = {
   officeSlug: OfficeSlug;
 };
 
-const DEFAULT_TOOLS = ["Read", "Write", "Edit", "Grep", "Glob", "Bash"];
+const DEFAULT_TOOLS = ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "WebSearch", "WebFetch"];
 
 /**
  * Add a new real agent + desk to an office config and create its workspace dir.

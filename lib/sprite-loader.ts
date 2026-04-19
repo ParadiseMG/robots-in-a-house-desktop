@@ -182,7 +182,7 @@ export function idleFramesForFacing(
   frames: PremadeFrames["frames"],
   facing: "N" | "E" | "S" | "W"
 ): Texture[] {
-  return frames[`idle${facing}`];
+  return frames[`idle${facing}`] ?? frames.idleS;
 }
 
 /**

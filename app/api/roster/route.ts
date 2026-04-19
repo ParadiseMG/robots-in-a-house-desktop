@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { db, queueDepth } from "@/server/db";
+import { db, queueDepth, activeDelegationsByDelegator, activeDelegationLinks } from "@/server/db";
 import type { OfficeConfig } from "@/lib/office-types";
 
-const VALID_SLUGS = new Set(["paradise", "dontcall", "operations"]);
+const VALID_SLUGS = new Set(["paradise", "dontcall", "operations", "launchos"]);
 
 async function loadOffice(slug: string): Promise<OfficeConfig | null> {
   if (!VALID_SLUGS.has(slug)) return null;
@@ -92,6 +92,16 @@ export async function GET(req: Request) {
     }
   }
 
+  // One query for the whole office's active delegations
+  const delegationsByAgent = activeDelegationsByDelegator(officeSlug);
+  // Pairs: who delegated to whom (for beam lines)
+  const delegationLinks = activeDelegationLinks(officeSlug);
+  // Map delegateeId → delegatorId for quick lookup per agent
+  const delegatedByMap = new Map<string, string>();
+  for (const link of delegationLinks) {
+    delegatedByMap.set(link.delegateeId, link.delegatorId);
+  }
+
   const entries = office.agents.map((agent) => {
     const current = currentByAgent.get(agent.id);
     const latestRun = current ? runByAssignment.get(current.assignment_id) : undefined;
@@ -104,6 +114,7 @@ export async function GET(req: Request) {
         name: agent.name,
         role: agent.role,
         isReal: agent.isReal,
+        isHead: agent.isHead ?? false,
         model: agent.model ?? null,
       },
       current: current
@@ -118,6 +129,8 @@ export async function GET(req: Request) {
           }
         : null,
       queueDepth: queueDepth(officeSlug, agent.id),
+      activeDelegations: delegationsByAgent.get(agent.id) ?? 0,
+      delegatedByAgentId: delegatedByMap.get(agent.id) ?? null,
     };
   });
 
