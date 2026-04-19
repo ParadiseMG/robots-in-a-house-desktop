@@ -21,6 +21,8 @@ import ActiveWarRooms from "@/components/events/ActiveWarRooms";
 import NotificationCenter from "@/components/notifications/NotificationCenter";
 import ErrorLog from "@/components/errors/ErrorLog";
 import Tooltip from "@/components/ui/Tooltip";
+import HealthBanner from "@/components/health/HealthBanner";
+import WelcomePrompt from "@/components/health/WelcomePrompt";
 import { useAmbientStream } from "@/hooks/useAmbientStream";
 import confetti from "canvas-confetti";
 
@@ -849,6 +851,7 @@ function HomeInner() {
           </div>
         </div>
       </header>
+      <HealthBanner />
       <div className="flex flex-1 flex-col overflow-hidden">
           <main
             className="relative min-h-0 flex-1 overflow-hidden"
@@ -1178,6 +1181,22 @@ function HomeInner() {
                   .then(() => refetchRoster())
                   .catch(() => {});
               }
+            }}
+          />
+          <WelcomePrompt
+            headAgentName={sidebarOffice.agents.find((a) => a.isHead)?.name ?? sidebarOffice.agents[0]?.name ?? null}
+            headAgentId={sidebarOffice.agents.find((a) => a.isHead)?.id ?? sidebarOffice.agents[0]?.id ?? null}
+            officeSlug={sidebarSlug}
+            onTryIt={async (agentId, slug, prompt) => {
+              const agent = sidebarOffice.agents.find((a) => a.id === agentId);
+              if (!agent) return;
+              await fetch("/api/quick-run", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ officeSlug: slug, agentId, prompt }),
+              }).catch(() => {});
+              if (agent.isReal) selectDesk(agent.deskId);
+              void refetchRoster();
             }}
           />
           <PromptBar
