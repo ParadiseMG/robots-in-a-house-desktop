@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useReducer,
+  useRef,
   type Dispatch,
 } from "react";
 
@@ -47,6 +48,22 @@ function reducer(state: State, action: Action): State {
     case "OPEN_OR_FOCUS": {
       const exists = state.tabs.find((t) => t.id === action.tab.id);
       if (exists) {
+        // Update mutable props (officeSlug, deskId, label) — they may have
+        // changed since the tab was persisted (e.g. agent moved offices).
+        const needsUpdate =
+          exists.officeSlug !== action.tab.officeSlug ||
+          exists.deskId !== action.tab.deskId ||
+          exists.label !== action.tab.label;
+        if (needsUpdate) {
+          return {
+            tabs: state.tabs.map((t) =>
+              t.id === exists.id
+                ? { ...t, officeSlug: action.tab.officeSlug, deskId: action.tab.deskId ?? t.deskId, label: action.tab.label }
+                : t,
+            ),
+            focusedId: exists.id,
+          };
+        }
         return { ...state, focusedId: exists.id };
       }
       const newTab: DockTab = {
@@ -165,23 +182,35 @@ export const DockTabsContext = createContext<DockTabsContextValue | null>(null);
 
 export function useDockTabsState(): [State, Dispatch<Action>] {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const hydrated = useRef(false);
+  const pendingHydrate = useRef(false);
 
   // Hydrate from localStorage once
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as State;
-      // Clear badges on restore (stale)
-      parsed.tabs = parsed.tabs.map((t) => ({ ...t, badge: null }));
-      dispatch({ type: "LOAD_PERSISTED", state: parsed });
+      if (raw) {
+        const parsed = JSON.parse(raw) as State;
+        parsed.tabs = parsed.tabs.map((t) => ({ ...t, badge: null }));
+        pendingHydrate.current = true;
+        dispatch({ type: "LOAD_PERSISTED", state: parsed });
+      } else {
+        hydrated.current = true;
+      }
     } catch {
-      // ignore parse errors
+      hydrated.current = true;
     }
   }, []);
 
-  // Persist on change (debounced by browser idle)
+  // Persist on change — skip until LOAD_PERSISTED has been processed
   useEffect(() => {
+    if (pendingHydrate.current) {
+      // This render is the result of LOAD_PERSISTED — data already in localStorage
+      pendingHydrate.current = false;
+      hydrated.current = true;
+      return;
+    }
+    if (!hydrated.current) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import MessageList, { type ChatMessage } from "@/components/dock/MessageList";
+import MessageList, { type ChatMessage, type PendingMessage } from "@/components/dock/MessageList";
 import ToolCallLine from "@/components/dock/ToolCallLine";
 import AwaitingInputForm from "@/components/dock/AwaitingInputForm";
 
@@ -46,6 +46,7 @@ export default function ChatTab({
   onStatusChange,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
+  const [pendingMessages, setPendingMessages] = useState<PendingMessage[]>([]);
   const [liveText, setLiveText] = useState("");
   const [liveTools, setLiveTools] = useState<Array<{ name: string; id: string }>>([]);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
@@ -95,6 +96,31 @@ export default function ChatTab({
       }
     })();
     return () => { alive = false; };
+  }, [officeSlug, agentId, refetchNonce]);
+
+  // Fetch pending messages
+  useEffect(() => {
+    const fetchPendingMessages = async () => {
+      try {
+        const qs = new URLSearchParams({ office: officeSlug, agentId });
+        const res = await fetch(`/api/queue?${qs}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = (await res.json()) as { queuedPrompts: Array<{ id: string; prompt: string; queued_at: number }> };
+        setPendingMessages(json.queuedPrompts.map(q => ({
+          id: q.id,
+          text: q.prompt,
+          queuedAt: q.queued_at,
+        })));
+      } catch {
+        // ignore
+      }
+    };
+
+    fetchPendingMessages();
+
+    // Poll for updates every 3 seconds
+    const interval = setInterval(fetchPendingMessages, 3000);
+    return () => clearInterval(interval);
   }, [officeSlug, agentId, refetchNonce]);
 
   // Auto-ack done runs
@@ -248,7 +274,7 @@ export default function ChatTab({
 
   const isReal = inspection?.agent?.isReal ?? false;
   const awaitingInput = runStatus === "awaiting_input";
-  const busy = chatPending || isLive || awaitingInput;
+  const busy = chatPending || awaitingInput; // Removed isLive - can send messages while agent is working
 
   return (
     <div
@@ -279,6 +305,7 @@ export default function ChatTab({
       {/* Message area */}
       <MessageList
         messages={messages}
+        pendingMessages={pendingMessages}
         liveText={liveText}
         liveTools={liveTools}
         liveStatus={liveStatus}
@@ -350,8 +377,10 @@ export default function ChatTab({
               placeholder={
                 awaitingInput
                   ? "reply above…"
-                  : busy
-                  ? "agent is working…"
+                  : chatPending
+                  ? "sending…"
+                  : isLive
+                  ? `${agentName} is working… (your message will queue)`
                   : `talk to ${agentName}…`
               }
               disabled={busy}

@@ -10,10 +10,17 @@ export type ChatMessage = {
   runId?: string;
 };
 
+export type PendingMessage = {
+  id: string;
+  text: string;
+  queuedAt: number;
+};
+
 type LiveTool = { name: string; id: string };
 
 type Props = {
   messages: ChatMessage[] | null;
+  pendingMessages: PendingMessage[];
   liveText: string;
   liveTools: LiveTool[];
   liveStatus: string | null;
@@ -27,6 +34,7 @@ const fmt = (ts: number) => {
 
 export default function MessageList({
   messages,
+  pendingMessages,
   liveText,
   liveTools,
   liveStatus,
@@ -34,12 +42,12 @@ export default function MessageList({
 }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  // Auto-scroll to bottom when messages or live text change
+  // Auto-scroll to bottom when messages, pending messages, or live text change
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages, liveText]);
+  }, [messages, pendingMessages, liveText]);
 
   return (
     <div
@@ -68,6 +76,26 @@ export default function MessageList({
               </div>
               <div className="mt-0.5 text-right font-mono text-[9px] text-white/30">
                 {fmt(m.ts)}
+              </div>
+            </div>
+          ))}
+
+          {/* Pending messages */}
+          {pendingMessages.map((p, i) => (
+            <div
+              key={`pending-${p.id}`}
+              className="ml-8 rounded-lg rounded-tr-sm border border-amber-400/30 bg-amber-400/10 p-2 text-xs text-amber-100"
+            >
+              <div className="whitespace-pre-wrap font-mono leading-relaxed">
+                {p.text}
+              </div>
+              <div className="mt-0.5 flex items-center justify-between font-mono text-[9px]">
+                <span className="text-amber-300/60">
+                  {i === 0 ? "next in queue" : `${i + 1} in queue`}
+                </span>
+                <span className="text-amber-300/40">
+                  {fmt(p.queuedAt)}
+                </span>
               </div>
             </div>
           ))}

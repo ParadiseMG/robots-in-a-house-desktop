@@ -90,6 +90,7 @@ function TabButton({
     <button
       type="button"
       onClick={onFocus}
+      data-desk-id={tab.deskId ?? undefined}
       className={`group flex h-full min-w-0 max-w-[160px] items-center gap-1.5 border-l-2 border-r border-r-white/10 px-3 font-mono text-[10px] uppercase tracking-wider transition-colors ${state.border} ${
         focused
           ? `bg-black/60 ${state.text || "text-white"}`

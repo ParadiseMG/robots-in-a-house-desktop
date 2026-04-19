@@ -18,11 +18,13 @@ import CommandPalette from "@/components/palette/CommandPalette";
 import UsageTracker from "@/components/usage/UsageTracker";
 import SpriteBubble from "@/components/sprite-bubble/SpriteBubble";
 import ChatDock, { DockTabsProvider } from "@/components/dock/ChatDock";
+import HeadsView from "@/components/views/HeadsView";
 import { useDockTabs } from "@/hooks/useDockTabs";
 import AgentHoverCard from "@/components/canvas/AgentHoverCard";
 import ActiveWarRooms from "@/components/events/ActiveWarRooms";
 import NotificationCenter from "@/components/notifications/NotificationCenter";
 import { useAmbientStream } from "@/hooks/useAmbientStream";
+import confetti from "canvas-confetti";
 
 const offices: Record<string, OfficeConfig> = {
   paradise: paradiseRaw as OfficeConfig,
@@ -80,7 +82,7 @@ export default function Home() {
 }
 
 function HomeInner() {
-  const { openOrFocus, openWarRoom, focusedTab } = useDockTabs();
+  const { openOrFocus, openWarRoom, focusedTab, tabs, reorder } = useDockTabs();
 
   // The office whose sidebar + roster data is shown. Always a real slug (never null).
   const [sidebarSlug, setSidebarSlug] = useState<OfficeSlug>("paradise");
@@ -91,6 +93,11 @@ function HomeInner() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedDeskId, setSelectedDeskId] = useState<string | null>(null);
   const [showGrid, setShowGrid] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [viewMode, setViewMode] = useState<"canvas" | "grid">(() => {
+    if (typeof window === "undefined") return "canvas";
+    return (localStorage.getItem("ri-view-mode") as "canvas" | "grid") ?? "canvas";
+  });
 
   const [rosterEntries, setRosterEntries] = useState<RosterEntry[] | null>(
     null,
@@ -328,6 +335,52 @@ function HomeInner() {
     return m;
   }, [rosterEntries]);
 
+  // Fire confetti over the agent card/sprite that just finished
+  const prevRunStatuses = useRef(new Map<string, string>());
+  useEffect(() => {
+    if (!rosterEntries) return;
+    const justFinished: string[] = [];
+    for (const e of rosterEntries) {
+      const c = e.current;
+      if (!c) continue;
+      const prev = prevRunStatuses.current.get(e.agent.deskId);
+      if (
+        c.runStatus === "done" &&
+        prev &&
+        prev !== "done" &&
+        !c.acknowledgedAt
+      ) {
+        justFinished.push(e.agent.deskId);
+      }
+      if (c.runStatus) prevRunStatuses.current.set(e.agent.deskId, c.runStatus);
+    }
+    for (const deskId of justFinished) {
+      // Find the element on screen — prefer larger card over tab button
+      const all = document.querySelectorAll(`[data-desk-id="${deskId}"]`);
+      let bestRect: DOMRect | undefined;
+      let bestArea = 0;
+      all.forEach((node) => {
+        const r = node.getBoundingClientRect();
+        const area = r.width * r.height;
+        if (area > bestArea) { bestArea = area; bestRect = r; }
+      });
+      const rect = bestRect;
+      const originX = rect
+        ? (rect.left + rect.width / 2) / window.innerWidth
+        : 0.5;
+      const originY = rect
+        ? (rect.top + rect.height / 3) / window.innerHeight
+        : 0.7;
+      void confetti({
+        particleCount: 60,
+        spread: 55,
+        origin: { x: originX, y: originY },
+        colors: ["#22d3ee", "#a78bfa", "#34d399", "#fbbf24", "#f472b6"],
+        disableForReducedMotion: true,
+      });
+    }
+  }, [rosterEntries]);
+
   // Map of deskId → count of active child runs this agent delegated.
   // Drives satellite dots around the delegator's sprite.
   const delegationsByDesk = useMemo(() => {
@@ -411,6 +464,67 @@ function HomeInner() {
     }
     return m;
   }, [rosterEntries]);
+
+  // All agents for the quick view (heads + pinnable)
+  const allQuickViewAgents = useMemo(() => {
+    const agents: Array<{
+      id: string; deskId: string; name: string; role: string;
+      officeSlug: string; officeName: string; accent: string;
+      premade: string | null; status: string | null;
+      activeDelegations: number; teamSize: number; isHead: boolean;
+    }> = [];
+    for (const slug of order) {
+      const office = offices[slug];
+      const stationModule = station.modules.find((m) => m.office === slug);
+      const teamSize = office.agents.filter((a) => a.isReal).length;
+      for (const a of office.agents) {
+        if (!a.isReal) continue;
+        const entry = rosterEntries?.find((e) => e.agent.id === a.id);
+        agents.push({
+          id: a.id,
+          deskId: a.deskId,
+          name: a.name,
+          role: a.role,
+          officeSlug: slug,
+          officeName: office.name,
+          accent: stationModule?.accent ?? office.theme.accent,
+          premade: a.visual?.premade ?? null,
+          status: entry?.current?.runStatus ?? null,
+          activeDelegations: entry?.activeDelegations ?? 0,
+          teamSize,
+          isHead: a.isHead ?? false,
+        });
+      }
+    }
+    return agents;
+  }, [rosterEntries]);
+
+  const headAgents = useMemo(
+    () => allQuickViewAgents.filter((a) => a.isHead),
+    [allQuickViewAgents],
+  );
+
+  // Pinned agent IDs for quick view (persisted to localStorage)
+  const [quickViewPins, setQuickViewPins] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      return JSON.parse(localStorage.getItem("ri-quickview-pins") ?? "[]");
+    } catch { return []; }
+  });
+  const pinAgent = (id: string) => {
+    setQuickViewPins((prev) => {
+      const next = [...prev, id];
+      localStorage.setItem("ri-quickview-pins", JSON.stringify(next));
+      return next;
+    });
+  };
+  const unpinAgent = (id: string) => {
+    setQuickViewPins((prev) => {
+      const next = prev.filter((p) => p !== id);
+      localStorage.setItem("ri-quickview-pins", JSON.stringify(next));
+      return next;
+    });
+  };
 
   const handleAgentClick = useCallback(
     (
@@ -665,6 +779,140 @@ function HomeInner() {
             className="relative min-h-0 flex-1 overflow-hidden"
             ref={officeContainerRef}
           >
+            {/* Toolbar — top-left (persists across views) */}
+            <div className="pointer-events-auto absolute left-3 top-3 z-30 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowSettings((v) => !v)}
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
+                title="Settings"
+              >
+                <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
+                  <rect x="6" y="0" width="4" height="2" fill="currentColor" />
+                  <rect x="6" y="14" width="4" height="2" fill="currentColor" />
+                  <rect x="0" y="6" width="2" height="4" fill="currentColor" />
+                  <rect x="14" y="6" width="2" height="4" fill="currentColor" />
+                  <rect x="1" y="1" width="3" height="3" fill="currentColor" />
+                  <rect x="12" y="1" width="3" height="3" fill="currentColor" />
+                  <rect x="1" y="12" width="3" height="3" fill="currentColor" />
+                  <rect x="12" y="12" width="3" height="3" fill="currentColor" />
+                  <rect x="3" y="3" width="10" height="10" fill="currentColor" />
+                  <rect x="5" y="5" width="6" height="6" fill="#1a1a2e" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode((v) => {
+                  const next = v === "canvas" ? "grid" : "canvas";
+                  localStorage.setItem("ri-view-mode", next);
+                  return next;
+                })}
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
+                title={viewMode === "canvas" ? "Switch to grid view" : "Switch to canvas view"}
+              >
+                <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
+                  <rect x="1" y="1" width="14" height="14" fill="currentColor" />
+                  <rect x="2" y="2" width="5" height="5" fill="#1a1a2e" />
+                  <rect x="9" y="2" width="5" height="5" fill="#1a1a2e" />
+                  <rect x="2" y="9" width="5" height="5" fill="#1a1a2e" />
+                  <rect x="9" y="9" width="5" height="5" fill="#1a1a2e" />
+                </svg>
+              </button>
+            </div>
+            {/* Tool buttons — top-right (persists across views) */}
+            <div className="pointer-events-auto absolute right-3 top-3 z-30 flex gap-2">
+              <a
+                href="/workspace-builder"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
+                title="Workspace Builder"
+              >
+                <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
+                  <rect x="7" y="1" width="2" height="1" fill="currentColor" />
+                  <rect x="5" y="2" width="6" height="1" fill="currentColor" />
+                  <rect x="3" y="3" width="10" height="1" fill="currentColor" />
+                  <rect x="3" y="4" width="10" height="7" fill="currentColor" />
+                  <rect x="7" y="8" width="2" height="3" fill="#1a1a2e" />
+                  <rect x="4" y="5" width="2" height="2" fill="#facc15" />
+                  <rect x="10" y="5" width="2" height="2" fill="#facc15" />
+                  <rect x="10" y="0" width="2" height="3" fill="currentColor" />
+                </svg>
+              </a>
+              <a
+                href="/sprite-maker"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
+                title="Sprite Maker"
+              >
+                <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
+                  <rect x="5" y="1" width="4" height="4" fill="currentColor" rx="0" />
+                  <rect x="6" y="5" width="2" height="3" fill="currentColor" />
+                  <rect x="4" y="6" width="2" height="1" fill="currentColor" />
+                  <rect x="8" y="6" width="2" height="1" fill="currentColor" />
+                  <rect x="5" y="8" width="2" height="3" fill="currentColor" />
+                  <rect x="7" y="8" width="2" height="3" fill="currentColor" />
+                  <rect x="12" y="1" width="1" height="3" fill="#facc15" />
+                  <rect x="11" y="2" width="3" height="1" fill="#facc15" />
+                  <rect x="10" y="0" width="1" height="1" fill="#facc15" opacity="0.5" />
+                  <rect x="14" y="0" width="1" height="1" fill="#facc15" opacity="0.5" />
+                  <rect x="10" y="4" width="1" height="1" fill="#facc15" opacity="0.5" />
+                  <rect x="14" y="4" width="1" height="1" fill="#facc15" opacity="0.5" />
+                </svg>
+              </a>
+            </div>
+            {/* Notifications — top-left, below toolbar (canvas view only) */}
+            {viewMode === "canvas" && <div className="pointer-events-auto absolute left-3 top-14 z-20 w-64">
+              <NotificationCenter
+                officeNames={officeNameMap}
+                officeAccents={officeAccentMap}
+                onOpenWarRoom={(slug, meetingId) => {
+                  const office = offices[slug];
+                  openWarRoom(
+                    slug,
+                    office ? `${office.name} War Room` : "War Room",
+                    meetingId,
+                  );
+                }}
+                onOpenAgent={(slug, agentId) => {
+                  const agentConfig = offices[slug]?.agents.find((a) => a.id === agentId);
+                  if (!agentConfig) return;
+                  openOrFocus({
+                    id: agentId,
+                    agentId,
+                    deskId: agentConfig.deskId,
+                    officeSlug: slug,
+                    kind: "1:1",
+                    label: agentConfig.name,
+                  });
+                }}
+              />
+            </div>}
+            {viewMode === "grid" ? (
+              <HeadsView
+                heads={headAgents}
+                pinnedIds={quickViewPins}
+                allAgents={allQuickViewAgents}
+                tabOrder={tabs.filter((t) => t.kind === "1:1" && t.agentId).map((t) => t.agentId!)}
+                onChat={(agent) => {
+                  openOrFocus({
+                    id: agent.id,
+                    agentId: agent.id,
+                    deskId: agent.deskId,
+                    officeSlug: agent.officeSlug,
+                    kind: "1:1",
+                    label: agent.name,
+                  });
+                }}
+                onPin={pinAgent}
+                onUnpin={unpinAgent}
+                onReorder={(fromId, toId) => {
+                  // Reorder dock tabs to match card drag
+                  reorder(fromId, toId);
+                }}
+              />
+            ) : (<>
             <Station
               station={station}
               offices={offices}
@@ -695,61 +943,6 @@ function HomeInner() {
               contextUsage={contextUsage}
               showGrid={showGrid}
             />
-            {/* Tool buttons — top-right */}
-            <div className="pointer-events-auto absolute right-3 top-3 z-30 flex gap-2">
-            <a
-              href="/workspace-builder"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
-              title="Workspace Builder"
-            >
-              {/* Pixel-art little house/building */}
-              <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
-                {/* Roof */}
-                <rect x="7" y="1" width="2" height="1" fill="currentColor" />
-                <rect x="5" y="2" width="6" height="1" fill="currentColor" />
-                <rect x="3" y="3" width="10" height="1" fill="currentColor" />
-                {/* Walls */}
-                <rect x="3" y="4" width="10" height="7" fill="currentColor" />
-                {/* Door */}
-                <rect x="7" y="8" width="2" height="3" fill="#1a1a2e" />
-                {/* Windows */}
-                <rect x="4" y="5" width="2" height="2" fill="#facc15" />
-                <rect x="10" y="5" width="2" height="2" fill="#facc15" />
-                {/* Chimney */}
-                <rect x="10" y="0" width="2" height="3" fill="currentColor" />
-              </svg>
-            </a>
-            <a
-              href="/sprite-maker"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
-              title="Sprite Maker"
-            >
-              {/* Pixel-art little person + sparkle */}
-              <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
-                {/* Head */}
-                <rect x="5" y="1" width="4" height="4" fill="currentColor" rx="0" />
-                {/* Body */}
-                <rect x="6" y="5" width="2" height="3" fill="currentColor" />
-                {/* Arms */}
-                <rect x="4" y="6" width="2" height="1" fill="currentColor" />
-                <rect x="8" y="6" width="2" height="1" fill="currentColor" />
-                {/* Legs */}
-                <rect x="5" y="8" width="2" height="3" fill="currentColor" />
-                <rect x="7" y="8" width="2" height="3" fill="currentColor" />
-                {/* Sparkle */}
-                <rect x="12" y="1" width="1" height="3" fill="#facc15" />
-                <rect x="11" y="2" width="3" height="1" fill="#facc15" />
-                <rect x="10" y="0" width="1" height="1" fill="#facc15" opacity="0.5" />
-                <rect x="14" y="0" width="1" height="1" fill="#facc15" opacity="0.5" />
-                <rect x="10" y="4" width="1" height="1" fill="#facc15" opacity="0.5" />
-                <rect x="14" y="4" width="1" height="1" fill="#facc15" opacity="0.5" />
-              </svg>
-            </a>
-            </div>
             {/* Active war rooms — top-right overlay, below tool buttons */}
             <div className="pointer-events-auto absolute right-3 top-14 z-20 w-64">
               <ActiveWarRooms
@@ -759,33 +952,6 @@ function HomeInner() {
                 onOpen={(slug, meetingId) => {
                   const office = offices[slug];
                   openWarRoom(slug, office ? `${office.name} War Room` : "War Room", meetingId);
-                }}
-              />
-            </div>
-            {/* Notifications — top-left overlay */}
-            <div className="pointer-events-auto absolute left-3 top-3 z-20 w-64">
-              <NotificationCenter
-                officeNames={officeNameMap}
-                officeAccents={officeAccentMap}
-                onOpenWarRoom={(slug, meetingId) => {
-                  const office = offices[slug];
-                  openWarRoom(
-                    slug,
-                    office ? `${office.name} War Room` : "War Room",
-                    meetingId,
-                  );
-                }}
-                onOpenAgent={(slug, agentId) => {
-                  const agentConfig = offices[slug]?.agents.find((a) => a.id === agentId);
-                  if (!agentConfig) return;
-                  openOrFocus({
-                    id: agentId,
-                    agentId,
-                    deskId: agentConfig.deskId,
-                    officeSlug: slug,
-                    kind: "1:1",
-                    label: agentConfig.name,
-                  });
                 }}
               />
             </div>
@@ -865,6 +1031,7 @@ function HomeInner() {
                 );
               })}
             </div>
+            </>)}
           </main>
           {hoverCard && (() => {
             const agent = agentByDesk.get(hoverCard.deskId);
