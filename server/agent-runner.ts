@@ -151,7 +151,7 @@ function makeToolApprovalServer(runId: string, agentId: string, officeSlug: stri
         "Request approval to use a tool that requires explicit permission. Use this before calling any tool that might be sensitive or destructive. Returns approved/denied status.",
         {
           tool_name: z.string().describe("Name of the tool you want to use"),
-          tool_input: z.record(z.unknown()).describe("Input parameters you want to pass to the tool"),
+          tool_input: z.record(z.string(), z.unknown()).describe("Input parameters you want to pass to the tool"),
           justification: z.string().describe("Brief explanation of why you need to use this tool")
         },
         async (args) => {
