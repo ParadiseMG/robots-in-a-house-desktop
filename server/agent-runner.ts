@@ -908,6 +908,26 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // Returns runs whose ended_at is after ?since=<epoch_ms>, plus any currently
+    // awaiting_input. Used by the Electron main process to fire native notifications.
+    if (req.method === "GET" && req.url?.startsWith("/runs/recent")) {
+      const params = new URL(req.url, `http://localhost:${PORT}`).searchParams;
+      const since = Number(params.get("since") ?? Date.now() - 30_000);
+      const rows = db()
+        .prepare(
+          `SELECT id, agent_id, office_slug, status, error, started_at, ended_at
+           FROM agent_runs
+           WHERE (ended_at > ? AND status IN ('done', 'error'))
+              OR status = 'awaiting_input'
+           ORDER BY started_at DESC
+           LIMIT 50`
+        )
+        .all(since);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(rows));
+      return;
+    }
+
     if (req.method === "GET" && req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
