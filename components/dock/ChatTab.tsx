@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import MessageList, { type ChatMessage, type PendingMessage } from "@/components/dock/MessageList";
 import ToolCallLine from "@/components/dock/ToolCallLine";
 import AwaitingInputForm from "@/components/dock/AwaitingInputForm";
+import Tooltip from "@/components/ui/Tooltip";
 
 type StreamEvent =
   | { kind: "assistant"; payload: { text: string } }
@@ -123,14 +124,9 @@ export default function ChatTab({
     return () => clearInterval(interval);
   }, [officeSlug, agentId, refetchNonce]);
 
-  // Auto-ack done runs
-  useEffect(() => {
-    const c = inspection?.current;
-    if (!c) return;
-    if (c.runStatus === "done" && c.runId && c.acknowledgedAt == null) {
-      void fetch(`/api/runs/${encodeURIComponent(c.runId)}/ack`, { method: "POST" }).catch(() => {});
-    }
-  }, [inspection]);
+  // No auto-ack here — the green checkmark on the sprite should persist
+  // until Connor explicitly clicks it (handled by handleAgentClick in page.tsx)
+  // or dismisses via the notification center.
 
   // SSE stream for active runs
   const runId = inspection?.current?.runId ?? null;
@@ -323,15 +319,18 @@ export default function ChatTab({
       )}
       {/* New chat button — top right */}
       {isReal && (
-        <button
-          type="button"
-          onClick={onNewChat}
-          disabled={resetting || isLive}
-          title="Start a new conversation (agent saves memory, then resets)"
-          className="absolute right-2 top-2 z-20 rounded border border-white/15 bg-black/70 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-white/40 backdrop-blur transition hover:border-white/30 hover:text-white/70 disabled:opacity-30"
-        >
-          {resetting ? "resetting…" : "new chat"}
-        </button>
+        <div className="absolute right-2 top-2 z-20">
+          <Tooltip label="Agent saves memory, then resets">
+            <button
+              type="button"
+              onClick={onNewChat}
+              disabled={resetting || isLive}
+              className="rounded border border-white/15 bg-black/70 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-white/40 backdrop-blur transition hover:border-white/30 hover:text-white/70 disabled:opacity-30"
+            >
+              {resetting ? "resetting..." : "new chat"}
+            </button>
+          </Tooltip>
+        </div>
       )}
 
       {/* Message area */}
@@ -393,15 +392,16 @@ export default function ChatTab({
               onChange={onFileChange}
             />
             {/* Attach button */}
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={busy || uploading}
-              title="Attach file"
-              className="shrink-0 rounded border border-white/20 bg-white/5 px-1.5 py-1 text-xs text-white/50 hover:bg-white/10 hover:text-white/80 disabled:opacity-40"
-            >
-              {uploading ? "⏳" : "📎"}
-            </button>
+            <Tooltip label="Attach file">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={busy || uploading}
+                className="shrink-0 rounded border border-white/20 bg-white/5 px-1.5 py-1 text-xs text-white/50 hover:bg-white/10 hover:text-white/80 disabled:opacity-40"
+              >
+                {uploading ? "\u23F3" : "\uD83D\uDCCE"}
+              </button>
+            </Tooltip>
             <input
               type="text"
               value={chatText}

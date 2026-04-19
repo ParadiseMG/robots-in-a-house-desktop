@@ -1,7 +1,44 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ToolCallLine from "@/components/dock/ToolCallLine";
+import Tooltip from "@/components/ui/Tooltip";
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // fallback
+    }
+  };
+
+  return (
+    <div className="absolute right-1.5 top-1.5">
+      <Tooltip label={copied ? "Copied!" : "Copy message"}>
+        <button
+          onClick={handleCopy}
+          className="rounded p-0.5 text-white/0 transition-colors group-hover:text-white/40 hover:!text-white/70 hover:!bg-white/10"
+        >
+          {copied ? (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+          )}
+        </button>
+      </Tooltip>
+    </div>
+  );
+}
 
 export type ChatMessage = {
   role: "user" | "assistant";
@@ -108,12 +145,13 @@ export default function MessageList({
           {messages.map((m, i) => (
             <div
               key={i}
-              className={
+              className={`group relative ${
                 m.role === "user"
                   ? "ml-8 rounded-lg rounded-tr-sm bg-sky-400/15 p-2 text-xs text-sky-100"
                   : "mr-8 rounded-lg rounded-tl-sm bg-white/10 p-2 text-xs text-white/90"
-              }
+              }`}
             >
+              <CopyButton text={m.text} />
               <div className="whitespace-pre-wrap font-mono leading-relaxed">
                 {m.text}
               </div>

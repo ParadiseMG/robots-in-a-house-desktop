@@ -1,23 +1,12 @@
 import { NextResponse } from "next/server";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { db, queueDepth, activeDelegationsByDelegator, activeDelegationLinks } from "@/server/db";
 import type { OfficeConfig } from "@/lib/office-types";
 import { withErrorReporting } from "@/lib/api-error-handler";
-
-const VALID_SLUGS = new Set(["paradise", "dontcall", "operations", "launchos"]);
+import { isValidOfficeSlug, loadOfficeConfig } from "@/lib/config-loader";
 
 async function loadOffice(slug: string): Promise<OfficeConfig | null> {
-  if (!VALID_SLUGS.has(slug)) return null;
-  try {
-    const raw = await fs.readFile(
-      path.join(process.cwd(), "config", `${slug}.office.json`),
-      "utf-8",
-    );
-    return JSON.parse(raw) as OfficeConfig;
-  } catch {
-    return null;
-  }
+  if (!isValidOfficeSlug(slug)) return null;
+  return loadOfficeConfig(slug);
 }
 
 export const dynamic = "force-dynamic";

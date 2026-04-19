@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentConfig, DeskConfig, OfficeConfig } from "./office-types";
+import { isValidOfficeSlug as checkSlug, listOfficeSlugs } from "./config-loader";
 
-const VALID_SLUGS = ["paradise", "dontcall", "operations", "launchos"] as const;
-export type OfficeSlug = (typeof VALID_SLUGS)[number];
+export type OfficeSlug = string;
 
 export class AgentBuilderError extends Error {
   status: number;
@@ -14,8 +14,8 @@ export class AgentBuilderError extends Error {
   }
 }
 
-export function isValidOfficeSlug(s: unknown): s is OfficeSlug {
-  return typeof s === "string" && VALID_SLUGS.includes(s as OfficeSlug);
+export function isValidOfficeSlug(s: unknown): s is string {
+  return typeof s === "string" && checkSlug(s);
 }
 
 function slugify(name: string): string {
@@ -62,7 +62,7 @@ async function pickSprite(): Promise<string> {
 
   const usage = new Map<string, number>();
   for (const s of available) usage.set(s, 0);
-  for (const slug of VALID_SLUGS) {
+  for (const slug of listOfficeSlugs()) {
     const office = await readOffice(slug);
     for (const a of office.agents) {
       const p = a.visual?.premade;
@@ -217,10 +217,58 @@ export async function createAgent(
   office.agents.push(agent);
 
   await writeOffice(opts.officeSlug, office);
-  await fs.mkdir(
-    path.join(process.cwd(), "agent-workspaces", opts.officeSlug, id),
-    { recursive: true },
+
+  const workspaceDir = path.join(
+    process.cwd(),
+    "agent-workspaces",
+    opts.officeSlug,
+    id,
   );
+  await fs.mkdir(workspaceDir, { recursive: true });
+
+  // Generate CLAUDE.md brief with memory contract
+  const claudeMd = `# ${name} — ${role}
+
+@AGENTS.md
+
+## Your role
+${role} in the ${opts.officeSlug} office.
+
+## Key rules
+- Read MEMORY.md at the start of every session for prior context.
+- Before a reset or when told "break time", update MEMORY.md with what you learned, what's in progress, and any gotchas.
+- Keep MEMORY.md concise — facts and open threads, not transcripts.
+- Close every task with a 1-3 sentence summary.
+
+## Memory
+At session start, read \`./MEMORY.md\` if it exists.
+On "break time" or session end, update \`./MEMORY.md\` before reset.
+
+## Never
+- Never say "I'll remember" without writing to MEMORY.md first.
+- Never take irreversible actions without confirmation.
+`;
+
+  const memoryMd = `# ${name} — Memory
+
+_No prior sessions yet._
+`;
+
+  // Write files only if they don't already exist (don't overwrite manual edits)
+  const claudePath = path.join(workspaceDir, "CLAUDE.md");
+  const memoryPath = path.join(workspaceDir, "MEMORY.md");
+
+  try {
+    await fs.access(claudePath);
+  } catch {
+    await fs.writeFile(claudePath, claudeMd, "utf-8");
+  }
+
+  try {
+    await fs.access(memoryPath);
+  } catch {
+    await fs.writeFile(memoryPath, memoryMd, "utf-8");
+  }
 
   return { agent, desk, officeSlug: opts.officeSlug };
 }

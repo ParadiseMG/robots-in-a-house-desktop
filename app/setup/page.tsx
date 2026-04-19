@@ -55,8 +55,22 @@ const SUGGESTED_TEAMS: {
   },
 ];
 
-type Step = "welcome" | "name" | "room" | "team" | "agents" | "review" | "done";
-const STEPS: Step[] = ["welcome", "name", "room", "team", "agents", "review", "done"];
+type Step = "welcome" | "name" | "room" | "team" | "agents" | "memory" | "review" | "done";
+const STEPS: Step[] = ["welcome", "name", "room", "team", "agents", "memory", "review", "done"];
+
+type ClaudeMemoryFile = {
+  name: string;
+  path: string;
+  content: string;
+  source: "global" | "project";
+  project?: string;
+};
+
+type ClaudeMemoryProject = {
+  slug: string;
+  label: string;
+  files: ClaudeMemoryFile[];
+};
 
 // ── Image helpers ───────────────────────────────────────────────────────────
 
@@ -228,6 +242,16 @@ export default function SetupWizard() {
   const [error, setError] = useState<string | null>(null);
   const [fadeIn, setFadeIn] = useState(true);
 
+  // Claude memory import
+  const [claudeMemory, setClaudeMemory] = useState<{
+    found: boolean;
+    global: ClaudeMemoryFile | null;
+    projects: ClaudeMemoryProject[];
+  } | null>(null);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [selectedMemory, setSelectedMemory] = useState<Set<string>>(new Set());
+  const [expandedProject, setExpandedProject] = useState<string | null>(null);
+
   // Load available sprites and rooms
   useEffect(() => {
     fetch("/api/workspace-builder/sprites")
@@ -268,6 +292,44 @@ export default function SetupWizard() {
     const i = STEPS.indexOf(step);
     if (i > 0) transition(STEPS[i - 1]);
   }, [step, transition]);
+
+  // Fetch Claude memory when entering that step
+  useEffect(() => {
+    if (step !== "memory" || claudeMemory !== null) return;
+    setMemoryLoading(true);
+    fetch("/api/claude-memory")
+      .then((r) => r.json())
+      .then((data) => {
+        setClaudeMemory(data);
+        // Auto-select global CLAUDE.md if it exists
+        if (data.global) {
+          setSelectedMemory((prev) => new Set([...prev, data.global.path]));
+        }
+      })
+      .catch(() => setClaudeMemory({ found: false, global: null, projects: [] }))
+      .finally(() => setMemoryLoading(false));
+  }, [step, claudeMemory]);
+
+  // Build the imported memory content string from selections
+  const buildImportedMemory = useCallback(() => {
+    if (!claudeMemory) return "";
+    const parts: string[] = [];
+
+    if (claudeMemory.global && selectedMemory.has(claudeMemory.global.path)) {
+      parts.push("## Imported from global Claude memory\n\n" + claudeMemory.global.content);
+    }
+
+    for (const project of claudeMemory.projects) {
+      const selected = project.files.filter((f) => selectedMemory.has(f.path));
+      if (selected.length === 0) continue;
+      parts.push(
+        `## Imported from: ${project.label}\n\n` +
+          selected.map((f) => f.content).join("\n\n---\n\n"),
+      );
+    }
+
+    return parts.join("\n\n---\n\n");
+  }, [claudeMemory, selectedMemory]);
 
   // Assign sprites to agents that don't have one
   const assignSprites = useCallback((agentList: AgentConfig[]) => {
@@ -415,10 +477,12 @@ export default function SetupWizard() {
         agents: placedAgents,
       };
 
+      const importedMemory = buildImportedMemory();
+
       const res = await fetch("/api/workspace-builder/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slug, config }),
+        body: JSON.stringify({ slug, config, importedMemory: importedMemory || undefined }),
       });
       if (!res.ok) throw new Error(await res.text());
 
@@ -428,7 +492,7 @@ export default function SetupWizard() {
     } finally {
       setSaving(false);
     }
-  }, [officeName, selectedRoom, agents, transition]);
+  }, [officeName, selectedRoom, agents, transition, buildImportedMemory]);
 
   const slug = officeName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
@@ -494,7 +558,7 @@ export default function SetupWizard() {
         {/* ── NAME ─────────────────────────────────────────────────── */}
         {step === "name" && (
           <div className="flex flex-col gap-6">
-            <ProgressBar current={0} total={4} />
+            <ProgressBar current={0} total={5} />
             <div>
               <h2 className="text-lg font-bold mb-1">Name your workspace</h2>
               <p className="text-xs text-white/40">This is your brand, team, or project name. You can change it later.</p>
@@ -528,7 +592,7 @@ export default function SetupWizard() {
         {/* ── ROOM ─────────────────────────────────────────────────── */}
         {step === "room" && (
           <div className="flex flex-col gap-6">
-            <ProgressBar current={1} total={4} />
+            <ProgressBar current={1} total={5} />
             <div>
               <h2 className="text-lg font-bold mb-1">Pick a room</h2>
               <p className="text-xs text-white/40">Choose the environment your agents will work in. This is cosmetic — you can swap it anytime.</p>
@@ -558,7 +622,7 @@ export default function SetupWizard() {
         {/* ── TEAM TEMPLATE ────────────────────────────────────────── */}
         {step === "team" && (
           <div className="flex flex-col gap-6">
-            <ProgressBar current={2} total={4} />
+            <ProgressBar current={2} total={5} />
             <div>
               <h2 className="text-lg font-bold mb-1">Choose a team shape</h2>
               <p className="text-xs text-white/40">
@@ -610,7 +674,7 @@ export default function SetupWizard() {
         {/* ── AGENTS ───────────────────────────────────────────────── */}
         {step === "agents" && (
           <div className="flex flex-col gap-6">
-            <ProgressBar current={3} total={4} />
+            <ProgressBar current={3} total={5} />
             <div>
               <h2 className="text-lg font-bold mb-1">Configure your agents</h2>
               <p className="text-xs text-white/40">
@@ -640,7 +704,131 @@ export default function SetupWizard() {
                 onClick={next}
                 className="rounded-lg bg-blue-500 px-6 py-2 text-xs font-bold text-white hover:bg-blue-400 transition-colors"
               >
-                Review
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── MEMORY IMPORT ───────────────────────────────────────── */}
+        {step === "memory" && (
+          <div className="flex flex-col gap-6">
+            <ProgressBar current={4} total={5} />
+            <div>
+              <h2 className="text-lg font-bold mb-1">Import Claude memory</h2>
+              <p className="text-xs text-white/40">
+                Seed your head agent with context from your existing Claude sessions.
+              </p>
+            </div>
+
+            {memoryLoading && (
+              <div className="flex items-center gap-3 py-8 justify-center">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white/60" />
+                <span className="text-xs text-white/40">Scanning ~/.claude/ ...</span>
+              </div>
+            )}
+
+            {!memoryLoading && claudeMemory && !claudeMemory.found && (
+              <div className="rounded-lg border border-white/10 bg-white/[0.02] p-6 text-center">
+                <p className="text-xs text-white/40 mb-1">No Claude memory found</p>
+                <p className="text-[10px] text-white/20">
+                  If you&apos;ve used Claude Code before, memory files live in ~/.claude/
+                </p>
+              </div>
+            )}
+
+            {!memoryLoading && claudeMemory && claudeMemory.found && (
+              <div className="flex flex-col gap-3 max-h-[340px] overflow-y-auto pr-1">
+                {/* Global CLAUDE.md */}
+                {claudeMemory.global && (
+                  <label className="flex items-start gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3 cursor-pointer hover:border-white/20 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={selectedMemory.has(claudeMemory.global.path)}
+                      onChange={() => {
+                        setSelectedMemory((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(claudeMemory.global!.path)) next.delete(claudeMemory.global!.path);
+                          else next.add(claudeMemory.global!.path);
+                          return next;
+                        });
+                      }}
+                      className="mt-0.5 accent-blue-500"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-bold">Global CLAUDE.md</span>
+                        <span className="text-[9px] text-white/20">~/.claude/CLAUDE.md</span>
+                      </div>
+                      <pre className="text-[10px] text-white/30 whitespace-pre-wrap line-clamp-4 font-mono">
+                        {claudeMemory.global.content}
+                      </pre>
+                    </div>
+                  </label>
+                )}
+
+                {/* Per-project memory */}
+                {claudeMemory.projects.map((project) => (
+                  <div key={project.slug} className="rounded-lg border border-white/10 bg-white/[0.02]">
+                    <button
+                      onClick={() =>
+                        setExpandedProject((prev) =>
+                          prev === project.slug ? null : project.slug,
+                        )
+                      }
+                      className="w-full flex items-center gap-2 p-3 text-left hover:bg-white/[0.02] transition-colors"
+                    >
+                      <span className="text-[10px] text-white/30">
+                        {expandedProject === project.slug ? "▾" : "▸"}
+                      </span>
+                      <span className="text-xs font-bold flex-1">{project.label}</span>
+                      <span className="text-[9px] text-white/20">
+                        {project.files.length} file{project.files.length !== 1 ? "s" : ""}
+                      </span>
+                    </button>
+
+                    {expandedProject === project.slug && (
+                      <div className="flex flex-col gap-1 px-3 pb-3">
+                        {project.files.map((file) => (
+                          <label
+                            key={file.path}
+                            className="flex items-start gap-3 rounded-md bg-white/[0.02] p-2 cursor-pointer hover:bg-white/[0.04] transition-colors"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedMemory.has(file.path)}
+                              onChange={() => {
+                                setSelectedMemory((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(file.path)) next.delete(file.path);
+                                  else next.add(file.path);
+                                  return next;
+                                });
+                              }}
+                              className="mt-0.5 accent-blue-500"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <span className="text-[10px] font-mono text-white/50">{file.name}</span>
+                              <pre className="text-[10px] text-white/20 whitespace-pre-wrap line-clamp-3 font-mono mt-1">
+                                {file.content}
+                              </pre>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-between">
+              <button onClick={back} className="text-xs text-white/30 hover:text-white/60 transition-colors">Back</button>
+              <button
+                onClick={next}
+                className="rounded-lg bg-blue-500 px-6 py-2 text-xs font-bold text-white hover:bg-blue-400 transition-colors"
+              >
+                {selectedMemory.size > 0 ? "Review" : "Skip"}
               </button>
             </div>
           </div>
@@ -683,6 +871,15 @@ export default function SetupWizard() {
                   </div>
                 ))}
               </div>
+
+              {selectedMemory.size > 0 && (
+                <div className="mt-4">
+                  <div className="text-[9px] text-white/30 mb-1">Imported memory</div>
+                  <div className="text-xs text-white/60">
+                    {selectedMemory.size} file{selectedMemory.size !== 1 ? "s" : ""} selected — will seed head agent
+                  </div>
+                </div>
+              )}
             </div>
 
             {error && (

@@ -3,12 +3,10 @@ import fs from "fs/promises";
 import path from "path";
 import type { OfficeConfig } from "@/lib/office-types";
 import { withErrorReporting } from "@/lib/api-error-handler";
+import { isValidOfficeSlug } from "@/lib/config-loader";
 
-const VALID_SLUGS = ["paradise", "dontcall", "operations", "launchos"] as const;
-type ValidSlug = (typeof VALID_SLUGS)[number];
-
-function isValidSlug(s: unknown): s is ValidSlug {
-  return VALID_SLUGS.includes(s as ValidSlug);
+function isValidSlug(s: unknown): s is string {
+  return typeof s === "string" && isValidOfficeSlug(s);
 }
 
 export const POST = withErrorReporting("POST /api/desks/move", async (req: Request) => {

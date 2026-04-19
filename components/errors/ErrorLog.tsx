@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import ReportBugModal from "@/components/errors/ReportBugModal";
+import Tooltip from "@/components/ui/Tooltip";
 
 type ErrorEntry = {
   id: string;
@@ -52,13 +54,16 @@ function timeLabel(ts: number): string {
 type Props = {
   officeNames: ReadonlyMap<string, string>;
   onOpenAgent?: (officeSlug: string, agentId: string) => void;
+  activeOfficeSlug?: string | null;
+  activeAgentId?: string | null;
 };
 
-export default function ErrorLog({ officeNames, onOpenAgent }: Props) {
+export default function ErrorLog({ officeNames, onOpenAgent, activeOfficeSlug, activeAgentId }: Props) {
   const [errors, setErrors] = useState<ErrorEntry[]>([]);
   const [count, setCount] = useState(0);
   const [collapsed, setCollapsed] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
   const prevCountRef = useRef(0);
 
   useEffect(() => {
@@ -119,30 +124,57 @@ export default function ErrorLog({ officeNames, onOpenAgent }: Props) {
     }
   };
 
-  if (count === 0 && errors.length === 0) return null;
+  const hasErrors = count > 0 || errors.length > 0;
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between px-2">
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          className="font-mono text-[9px] uppercase tracking-widest hover:text-white/70"
-          style={{ color: ERROR_COLOR }}
-          title={collapsed ? "expand errors" : "collapse errors"}
-        >
-          {collapsed ? ">" : "v"} errors · {count}
-        </button>
-        {!collapsed && count > 1 && (
+        {hasErrors ? (
           <button
             type="button"
-            onClick={() => void dismissAll()}
-            className="font-mono text-[9px] uppercase tracking-wider text-white/30 hover:text-white/60"
+            onClick={() => setCollapsed((c) => !c)}
+            className="font-mono text-[9px] uppercase tracking-widest hover:text-white/70"
+            style={{ color: ERROR_COLOR }}
+            title={collapsed ? "expand errors" : "collapse errors"}
           >
-            clear all
+            {collapsed ? ">" : "v"} errors · {count}
           </button>
+        ) : (
+          <span />
         )}
+        <div className="flex items-center gap-2">
+          {!collapsed && count > 1 && (
+            <button
+              type="button"
+              onClick={() => void dismissAll()}
+              className="font-mono text-[9px] uppercase tracking-wider text-white/30 hover:text-white/60"
+            >
+              clear all
+            </button>
+          )}
+          <Tooltip label="Report a bug">
+          <button
+            type="button"
+            onClick={() => setReportOpen(true)}
+            className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider text-white/30 hover:text-red-300/70 transition-colors"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            report bug
+          </button>
+          </Tooltip>
+        </div>
       </div>
+
+      <ReportBugModal
+        open={reportOpen}
+        onClose={() => setReportOpen(false)}
+        officeSlug={activeOfficeSlug}
+        agentId={activeAgentId}
+      />
 
       {!collapsed &&
         errors.map((err) => {
@@ -241,17 +273,20 @@ export default function ErrorLog({ officeNames, onOpenAgent }: Props) {
                 </div>
               )}
 
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void dismiss(err.id);
-                }}
-                className="absolute right-1 top-1 rounded px-1 font-mono text-[10px] leading-none text-white/25 opacity-0 transition hover:text-white/80 group-hover:opacity-100"
-                title="dismiss"
-              >
-                x
-              </button>
+              <div className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 transition">
+                <Tooltip label="Dismiss">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void dismiss(err.id);
+                    }}
+                    className="rounded px-1 font-mono text-[10px] leading-none text-white/25 hover:text-white/80"
+                  >
+                    x
+                  </button>
+                </Tooltip>
+              </div>
             </div>
           );
         })}

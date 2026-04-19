@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Tooltip from "@/components/ui/Tooltip";
 
 // Front-facing idle frame coordinates in LimeZu premade spritesheets:
 // idleS first frame: x = 18 * 16 = 288, y = 32, size = 16x32
@@ -128,19 +129,22 @@ function AgentCard({
     >
       {/* Remove button for pinned (non-head) agents */}
       {onRemove && (
-        <span
-          role="button"
-          tabIndex={-1}
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
-          className="absolute right-1.5 top-1.5 rounded px-1 py-0.5 font-mono text-white/20 opacity-0 transition group-hover:opacity-100 hover:text-white/60"
-          style={{ fontSize: sz.monoText }}
-          title="Remove from quick view"
-        >
-          x
-        </span>
+        <div className="absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 transition">
+          <Tooltip label="Remove from quick view">
+            <span
+              role="button"
+              tabIndex={-1}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove();
+              }}
+              className="rounded px-1 py-0.5 font-mono text-white/20 hover:text-white/60"
+              style={{ fontSize: sz.monoText }}
+            >
+              x
+            </span>
+          </Tooltip>
+        </div>
       )}
 
       {/* Sprite */}
@@ -376,12 +380,12 @@ export default function HeadsView({ heads, pinnedIds, allAgents, tabOrder, onCha
         ))}
 
         {/* Add agent button */}
+        <Tooltip label="Add agent to quick view" position="bottom">
         <button
           type="button"
           onClick={() => setShowPicker(true)}
           className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/10 bg-zinc-900/40 transition-all hover:border-white/25 hover:bg-zinc-800/40"
           style={{ width: sz.card, padding: sz.pad, gap: sz.gap }}
-          title="Add agent to quick view"
         >
           <div
             className="flex items-center justify-center rounded-full border-2 border-dashed border-white/10"
@@ -393,6 +397,7 @@ export default function HeadsView({ heads, pinnedIds, allAgents, tabOrder, onCha
             add agent
           </span>
         </button>
+        </Tooltip>
       </div>
 
       {showPicker && (

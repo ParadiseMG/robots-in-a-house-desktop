@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useDockTabs, type DockTab } from "@/hooks/useDockTabs";
+import Tooltip from "@/components/ui/Tooltip";
 
 type AgentStatus = { agentId: string; status: string };
 type WarRoomSummary = {
@@ -48,6 +49,7 @@ type Props = {
   onOpenPicker: () => void;
   deskRunStatus?: ReadonlyMap<string, string>;
   onAckDesk?: (deskId: string) => void;
+  onReportBug?: () => void;
 };
 
 function tabStateColor(status: string | undefined): {
@@ -129,10 +131,12 @@ export default function TabStrip({
   onOpenPicker,
   deskRunStatus,
   onAckDesk,
+  onReportBug,
 }: Props) {
-  const { tabs, focusedId, focus, close, reorder } = useDockTabs();
+  const { tabs, focusedId, focus, close, reorder, moveToEnd } = useDockTabs();
   const warRoomStatuses = useWarRoomStatuses();
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [dragOverEnd, setDragOverEnd] = useState<boolean>(false);
   const dragIdRef = useRef<string | null>(null);
 
   // Cmd+1/2/3 shortcuts
@@ -154,15 +158,16 @@ export default function TabStrip({
   return (
     <div className="flex h-9 min-h-9 w-full items-stretch border-b border-white/10">
       {/* Collapse toggle */}
-      <button
-        type="button"
-        onClick={onToggleCollapse}
-        className="flex w-8 shrink-0 items-center justify-center border-r border-white/10 text-white/40 hover:bg-white/5 hover:text-white"
-        title={collapsed ? "Expand dock" : "Collapse dock"}
-        aria-label={collapsed ? "Expand dock" : "Collapse dock"}
-      >
-        <span className="text-[10px]">{collapsed ? "▲" : "▼"}</span>
-      </button>
+      <Tooltip label={collapsed ? "Expand dock" : "Collapse dock"} position="bottom">
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className="flex w-8 shrink-0 items-center justify-center border-r border-white/10 text-white/40 hover:bg-white/5 hover:text-white"
+          aria-label={collapsed ? "Expand dock" : "Collapse dock"}
+        >
+          <span className="text-[10px]">{collapsed ? "▲" : "▼"}</span>
+        </button>
+      </Tooltip>
 
       {/* Tab list */}
       <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
@@ -184,9 +189,14 @@ export default function TabStrip({
               onDragOver={(e) => {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = "move";
-                if (dragIdRef.current !== tab.id) setDragOverId(tab.id);
+                if (dragIdRef.current !== tab.id) {
+                  setDragOverId(tab.id);
+                  setDragOverEnd(false);
+                }
               }}
-              onDragLeave={() => setDragOverId(null)}
+              onDragLeave={() => {
+                setDragOverId(null);
+              }}
               onDrop={(e) => {
                 e.preventDefault();
                 const fromId = dragIdRef.current;
@@ -196,6 +206,7 @@ export default function TabStrip({
               }}
               onDragEnd={() => {
                 setDragOverId(null);
+                setDragOverEnd(false);
                 dragIdRef.current = null;
               }}
             >
@@ -215,18 +226,65 @@ export default function TabStrip({
             </div>
           );
         })}
+        {/* End drop zone for dragging past last tab */}
+        <div
+          className="relative flex h-full min-w-8 items-stretch"
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            if (dragIdRef.current) {
+              setDragOverEnd(true);
+              setDragOverId(null);
+            }
+          }}
+          onDragLeave={() => {
+            setDragOverEnd(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            const fromId = dragIdRef.current;
+            if (fromId) {
+              moveToEnd(fromId);
+            }
+            setDragOverEnd(false);
+            dragIdRef.current = null;
+          }}
+        >
+          {dragOverEnd && (
+            <div className="pointer-events-none absolute inset-y-1 left-0 w-0.5 rounded-full bg-white/60" />
+          )}
+        </div>
       </div>
 
+      {/* Report bug */}
+      {onReportBug && (
+        <Tooltip label="Report a bug" position="bottom">
+          <button
+            type="button"
+            onClick={onReportBug}
+            className="flex w-8 shrink-0 items-center justify-center border-l border-white/10 text-white/30 hover:bg-red-400/10 hover:text-red-300 transition-colors"
+            aria-label="Report a bug"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </button>
+        </Tooltip>
+      )}
+
       {/* New tab / picker */}
-      <button
-        type="button"
-        onClick={onOpenPicker}
-        className="flex w-8 shrink-0 items-center justify-center border-l border-white/10 text-white/40 hover:bg-white/5 hover:text-white"
-        title="Open agent picker"
-        aria-label="Open agent picker"
-      >
-        <span className="text-sm font-light">+</span>
-      </button>
+      <Tooltip label="Open agent picker" position="bottom">
+        <button
+          type="button"
+          onClick={onOpenPicker}
+          className="flex w-8 shrink-0 items-center justify-center border-l border-white/10 text-white/40 hover:bg-white/5 hover:text-white"
+          aria-label="Open agent picker"
+        >
+          <span className="text-sm font-light">+</span>
+        </button>
+      </Tooltip>
     </div>
   );
 }

@@ -771,9 +771,26 @@ async function runAgent(params: {
     "mcp__robots-delegate__check_delegation",
   );
 
+  // --- Memory injection: read MEMORY.md and prepend to prompt on fresh runs ---
+  let effectivePrompt = prompt;
+  if (!resume) {
+    const memoryPath = join(cwd, "MEMORY.md");
+    if (existsSync(memoryPath)) {
+      try {
+        const memoryContent = readFileSync(memoryPath, "utf-8").trim();
+        if (memoryContent) {
+          effectivePrompt =
+            `<memory>\nThe following is your persisted memory from previous sessions. Use it for context but do not repeat it back.\n\n${memoryContent}\n</memory>\n\n${prompt}`;
+        }
+      } catch {
+        // non-fatal — skip memory if unreadable
+      }
+    }
+  }
+
   try {
     const q = query({
-      prompt,
+      prompt: effectivePrompt,
       options: {
         cwd,
         allowedTools: [...(agent.allowedTools ?? []), ...extraAllowed],
