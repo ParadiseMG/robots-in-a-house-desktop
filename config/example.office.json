@@ -11,7 +11,7 @@
     "highlight": "#88bbff",
     "bg": "#1a2030",
     "premadeRoom": {
-      "layers": ["paradise_japanese_lounge_layer1.png"],
+      "layers": ["paradise_japanese_lounge_layer1.png", "paradise_japanese_lounge_layer2.png"],
       "pixelWidth": 304,
       "pixelHeight": 214,
       "sourceTileSize": 16,
