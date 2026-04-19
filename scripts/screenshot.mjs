@@ -24,3 +24,4 @@ try {
 } finally {
   await browser.close();
 }
+// test
