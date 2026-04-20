@@ -4,6 +4,7 @@ import path from "path";
 import type { OfficeConfig } from "@/lib/office-types";
 import { withErrorReporting } from "@/lib/api-error-handler";
 import { isValidOfficeSlug } from "@/lib/config-loader";
+import { CONFIG_DIR } from "@/lib/data-paths";
 
 function isValidSlug(s: unknown): s is string {
   return typeof s === "string" && isValidOfficeSlug(s);
@@ -29,7 +30,7 @@ export const POST = withErrorReporting("POST /api/desks/move", async (req: Reque
     return NextResponse.json({ ok: false, error: "gridX and gridY must be numbers" }, { status: 400 });
   }
 
-  const configPath = path.join(process.cwd(), "config", `${officeSlug}.office.json`);
+  const configPath = path.join(CONFIG_DIR, `${officeSlug}.office.json`);
 
   let office: OfficeConfig;
   try {

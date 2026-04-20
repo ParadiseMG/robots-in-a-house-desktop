@@ -37,7 +37,8 @@ import {
 
 const PORT = Number(process.env.RUNNER_PORT) || 3101;
 const ROOT = process.cwd();
-const CHANGELOG_PATH = join(ROOT, "data", "changelog.jsonl");
+const DATA_ROOT = process.env.RIAH_DATA_DIR || ROOT;
+const CHANGELOG_PATH = join(DATA_ROOT, "data", "changelog.jsonl");
 
 type ChangelogEntry = {
   ts: string;
@@ -732,7 +733,7 @@ async function runAgent(params: {
   }
 
   const cwdRel = agent.cwd ?? `agent-workspaces/${officeSlug}/${agentId}`;
-  const cwd = resolve(ROOT, cwdRel);
+  const cwd = resolve(DATA_ROOT, cwdRel);
   mkdirSync(cwd, { recursive: true });
 
   const resume =
@@ -1071,7 +1072,7 @@ const server = createServer(async (req, res) => {
 
 // Touch DB to force migrations at boot
 db();
-const LOG_DIR = join(ROOT, "data");
+const LOG_DIR = join(DATA_ROOT, "data");
 mkdirSync(LOG_DIR, { recursive: true });
 
 // Zombie cleanup: mark any in-flight runs as `interrupted` on restart. This is

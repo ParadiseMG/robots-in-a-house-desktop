@@ -3,7 +3,8 @@ import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { OfficeConfig } from "../lib/office-types.js";
 
-const DB_DIR = join(process.cwd(), "data");
+const DATA_ROOT = process.env.RIAH_DATA_DIR || process.cwd();
+const DB_DIR = join(DATA_ROOT, "data");
 const DB_PATH = join(DB_DIR, "robots.db");
 
 let _db: Database.Database | null = null;
@@ -284,7 +285,7 @@ function seedIfEmpty(d: Database.Database) {
 
 function loadOffice(officeSlug: string): OfficeConfig | null {
   try {
-    const filePath = join(process.cwd(), "config", `${officeSlug}.office.json`);
+    const filePath = join(DATA_ROOT, "config", `${officeSlug}.office.json`);
     if (!existsSync(filePath)) return null;
     const raw = readFileSync(filePath, "utf-8");
     return JSON.parse(raw) as OfficeConfig;

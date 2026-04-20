@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import fs from "node:fs";
-import path from "node:path";
+import { CONFIG_DIR } from "@/lib/data-paths";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
  * The setup wizard uses this, and the main page can redirect first-time users.
  */
 export async function GET() {
-  const configDir = path.join(process.cwd(), "config");
+  const configDir = CONFIG_DIR;
   try {
     const files = fs.readdirSync(configDir).filter((f) => f.endsWith(".office.json"));
     // If no office configs exist at all, the user needs setup

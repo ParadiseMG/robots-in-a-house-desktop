@@ -36,6 +36,61 @@ let isQuitting = false;
 // Root of the packaged app (or the project root in dev)
 const APP_ROOT = path.join(__dirname, "..");
 
+// ---- Persistent data directory ------------------------------------------------
+// Store mutable data (db, configs, workspaces) in userData so it survives app
+// updates. On first launch, seed from the bundled defaults.
+const DATA_DIR = path.join(app.getPath("userData"), "app-data");
+
+function seedDataDir() {
+  const marker = path.join(DATA_DIR, ".seeded");
+  // Always ensure the data dir and subdirs exist
+  for (const sub of ["config", "data", "agent-workspaces"]) {
+    fs.mkdirSync(path.join(DATA_DIR, sub), { recursive: true });
+  }
+
+  if (fs.existsSync(marker)) return; // already seeded
+
+  console.log(`[main] seeding data dir: ${DATA_DIR}`);
+
+  // Copy bundled config/*.office.json → DATA_DIR/config/
+  const bundledConfig = path.join(APP_ROOT, "config");
+  if (fs.existsSync(bundledConfig)) {
+    for (const file of fs.readdirSync(bundledConfig)) {
+      if (!file.endsWith(".office.json")) continue;
+      const dest = path.join(DATA_DIR, "config", file);
+      if (!fs.existsSync(dest)) {
+        fs.copyFileSync(path.join(bundledConfig, file), dest);
+      }
+    }
+  }
+
+  // Copy bundled agent-workspaces/ → DATA_DIR/agent-workspaces/
+  const bundledWorkspaces = path.join(APP_ROOT, "agent-workspaces");
+  if (fs.existsSync(bundledWorkspaces)) {
+    copyDirRecursive(bundledWorkspaces, path.join(DATA_DIR, "agent-workspaces"));
+  }
+
+  // Note: we do NOT copy data/robots.db — the app creates it fresh via migrate()
+  // and seedIfEmpty(). This avoids shipping stale dev data.
+
+  fs.writeFileSync(marker, new Date().toISOString(), "utf-8");
+  console.log("[main] data dir seeded.");
+}
+
+/** Recursively copy a directory, skipping files that already exist at dest. */
+function copyDirRecursive(src: string, dest: string) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDirRecursive(srcPath, destPath);
+    } else if (!fs.existsSync(destPath)) {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
 // ---- Child process helpers ---------------------------------------------------
 
 /** Spawn next start on port 3200 using Electron's own Node binary.
@@ -45,7 +100,7 @@ function startNext(): ChildProcess {
   const nextCli = path.join(APP_ROOT, "node_modules", "next", "dist", "bin", "next");
   const proc = spawn(process.execPath, [nextCli, "start", "--port", "3200"], {
     cwd: APP_ROOT,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", RIAH_DATA_DIR: DATA_DIR },
     stdio: "pipe",
   });
 
@@ -71,7 +126,7 @@ function startRunner(): ChildProcess {
   const runnerJs = path.join(__dirname, "agent-runner.js");
   const proc = spawn(process.execPath, [runnerJs], {
     cwd: APP_ROOT,
-    env: { ...process.env },
+    env: { ...process.env, RIAH_DATA_DIR: DATA_DIR },
     stdio: "pipe",
   });
 
@@ -417,6 +472,9 @@ function fireNotification(
 
 app.on("ready", async () => {
   console.log("[main] app ready — starting services…");
+
+  // Ensure persistent data dir exists and is seeded with bundled defaults
+  seedDataDir();
 
   // Show splash screen immediately
   splashWindow = new BrowserWindow({

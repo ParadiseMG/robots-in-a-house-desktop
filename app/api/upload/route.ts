@@ -5,7 +5,8 @@ import crypto from "node:crypto";
 
 export const dynamic = "force-dynamic";
 
-const UPLOADS_DIR = path.join(process.cwd(), "uploads");
+const DATA_ROOT = process.env.RIAH_DATA_DIR || process.cwd();
+const UPLOADS_DIR = path.join(DATA_ROOT, "uploads");
 
 export async function POST(req: Request) {
   try {

@@ -8,14 +8,15 @@ import { existsSync, mkdirSync, accessSync, constants } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 
-const ROOT = process.cwd();
+const APP_ROOT = process.cwd();
+const DATA_ROOT = process.env.RIAH_DATA_DIR || APP_ROOT;
 
 type CheckResult = { ok: true } | { ok: false; message: string };
 
 // ── Individual checks ──────────────────────────────────
 
 function checkDataDir(): CheckResult {
-  const dir = join(ROOT, "data");
+  const dir = join(DATA_ROOT, "data");
   try {
     mkdirSync(dir, { recursive: true });
     // Verify writable
@@ -27,7 +28,7 @@ function checkDataDir(): CheckResult {
 }
 
 function checkDatabase(): CheckResult {
-  const dbPath = join(ROOT, "data", "robots.db");
+  const dbPath = join(DATA_ROOT, "data", "robots.db");
   try {
     // Open (or create) the database and verify it responds
     const testDb = new Database(dbPath);
@@ -49,7 +50,7 @@ function checkConfigs(): CheckResult {
     "config/dontcall.office.json",
     "config/operations.office.json",
   ];
-  const missing = required.filter((f) => !existsSync(join(ROOT, f)));
+  const missing = required.filter((f) => !existsSync(join(DATA_ROOT, f)));
   if (missing.length > 0) {
     return { ok: false, message: `Missing config files: ${missing.join(", ")}` };
   }
@@ -57,7 +58,7 @@ function checkConfigs(): CheckResult {
 }
 
 function checkAgentWorkspaces(): CheckResult {
-  const dir = join(ROOT, "agent-workspaces");
+  const dir = join(DATA_ROOT, "agent-workspaces");
   if (!existsSync(dir)) {
     return { ok: false, message: "agent-workspaces/ directory missing" };
   }
@@ -65,7 +66,7 @@ function checkAgentWorkspaces(): CheckResult {
 }
 
 function checkNodeModules(): CheckResult {
-  if (!existsSync(join(ROOT, "node_modules"))) {
+  if (!existsSync(join(APP_ROOT, "node_modules"))) {
     return { ok: false, message: "node_modules/ missing — run `npm install`" };
   }
   return { ok: true };
@@ -74,7 +75,7 @@ function checkNodeModules(): CheckResult {
 function checkNextBuild(): CheckResult {
   // Only relevant in production
   if (process.env.NODE_ENV !== "production") return { ok: true };
-  if (!existsSync(join(ROOT, ".next"))) {
+  if (!existsSync(join(APP_ROOT, ".next"))) {
     return { ok: false, message: ".next/ missing — run `npm run build` before starting in production" };
   }
   return { ok: true };

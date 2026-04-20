@@ -10,7 +10,8 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { insertError, type ErrorLogRow } from "./db.js";
 
-const LOG_DIR = join(process.cwd(), "data");
+const DATA_ROOT = process.env.RIAH_DATA_DIR || process.cwd();
+const LOG_DIR = join(DATA_ROOT, "data");
 const JSONL_PATH = join(LOG_DIR, "errors.jsonl");
 
 mkdirSync(LOG_DIR, { recursive: true });

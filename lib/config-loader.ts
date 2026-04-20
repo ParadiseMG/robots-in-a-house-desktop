@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OfficeConfig } from "./office-types";
+import { CONFIG_DIR } from "./data-paths";
 
-const CONFIG_DIR = path.join(process.cwd(), "config");
 
 /**
  * Discover all office slugs by scanning config/ for *.office.json files.

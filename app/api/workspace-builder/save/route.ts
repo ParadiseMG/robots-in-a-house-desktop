@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OfficeConfig } from "@/lib/office-types";
+import { CONFIG_DIR, WORKSPACES_DIR } from "@/lib/data-paths";
 
 export const dynamic = "force-dynamic";
 
@@ -23,15 +24,14 @@ export async function POST(req: Request) {
     }
     const safe = slug.replace(/[^a-zA-Z0-9_-]/g, "-");
     const filename = `${safe}.office.json`;
-    const outPath = path.join(process.cwd(), "config", filename);
+    const outPath = path.join(CONFIG_DIR, filename);
     await fs.writeFile(outPath, JSON.stringify(config, null, 2));
 
     // Create agent workspace directories with CLAUDE.md + MEMORY.md templates
     for (const agent of config.agents) {
       if (!agent.isReal) continue;
       const workspaceDir = path.join(
-        process.cwd(),
-        "agent-workspaces",
+        WORKSPACES_DIR,
         safe,
         agent.id,
       );
