@@ -8,7 +8,7 @@
  *   4. Gracefully shut down both child processes on exit
  */
 
-import { app, BrowserWindow, dialog, Tray, Menu, nativeImage, Notification } from "electron";
+import { app, BrowserWindow, dialog, Tray, Menu, nativeImage, Notification, ipcMain } from "electron";
 import { spawn, ChildProcess } from "node:child_process";
 import * as http from "node:http";
 import * as path from "node:path";
@@ -249,6 +249,33 @@ function setupAutoUpdater() {
   );
 }
 
+// ---- IPC handlers -----------------------------------------------------------
+
+function setupIPC() {
+  ipcMain.handle("app:get-version", () => {
+    return app.getVersion();
+  });
+
+  ipcMain.handle("app:get-data-dir", () => {
+    return DATA_DIR;
+  });
+
+  ipcMain.handle("app:check-for-updates", async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      if (result && result.updateInfo) {
+        return {
+          available: result.updateInfo.version !== app.getVersion(),
+          version: result.updateInfo.version,
+        };
+      }
+      return { available: false };
+    } catch {
+      return null;
+    }
+  });
+}
+
 // ---- Notification preferences -----------------------------------------------
 
 interface NotificationPrefs {
@@ -476,6 +503,9 @@ app.on("ready", async () => {
   // Ensure persistent data dir exists and is seeded with bundled defaults
   seedDataDir();
 
+  // Register IPC handlers for renderer bridge
+  setupIPC();
+
   // Show splash screen immediately
   splashWindow = new BrowserWindow({
     width: 320,
@@ -512,6 +542,7 @@ app.on("ready", async () => {
     show: false,
     webPreferences: {
       contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
 

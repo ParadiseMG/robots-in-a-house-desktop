@@ -23,6 +23,7 @@ import ErrorLog from "@/components/errors/ErrorLog";
 import Tooltip from "@/components/ui/Tooltip";
 import HealthBanner from "@/components/health/HealthBanner";
 import WelcomePrompt from "@/components/health/WelcomePrompt";
+import SettingsPanel from "@/components/settings/SettingsPanel";
 import { useAmbientStream } from "@/hooks/useAmbientStream";
 import confetti from "canvas-confetti";
 
@@ -899,6 +900,8 @@ function HomeInner() {
               </button>
               </Tooltip>
             </div>
+            {/* Settings panel */}
+            <SettingsPanel open={showSettings} onClose={() => setShowSettings(false)} />
             {/* Tool buttons — top-right (persists across views) */}
             <div className="pointer-events-auto absolute right-3 top-3 z-30 flex gap-2">
               <Tooltip label="Workspace Builder" position="bottom">

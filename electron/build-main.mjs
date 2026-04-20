@@ -50,7 +50,16 @@ await build({
 });
 console.log("  done.");
 
-// ---- 2. Agent runner ---------------------------------------------------------
+// ---- 2. Preload script -------------------------------------------------------
+console.log("Building electron/preload.ts → electron/preload.js …");
+await build({
+  ...sharedConfig,
+  entryPoints: [join(__dirname, "preload.ts")],
+  outfile: join(__dirname, "preload.js"),
+});
+console.log("  done.");
+
+// ---- 3. Agent runner ---------------------------------------------------------
 console.log("Building server/agent-runner.ts → electron/agent-runner.js …");
 await build({
   ...sharedConfig,
