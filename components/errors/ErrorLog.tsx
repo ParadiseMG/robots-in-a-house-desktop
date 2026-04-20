@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import ReportBugModal from "@/components/errors/ReportBugModal";
 import Tooltip from "@/components/ui/Tooltip";
 
 type ErrorEntry = {
@@ -63,7 +62,6 @@ export default function ErrorLog({ officeNames, onOpenAgent, activeOfficeSlug, a
   const [count, setCount] = useState(0);
   const [collapsed, setCollapsed] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [reportOpen, setReportOpen] = useState(false);
   const prevCountRef = useRef(0);
 
   useEffect(() => {
@@ -152,29 +150,8 @@ export default function ErrorLog({ officeNames, onOpenAgent, activeOfficeSlug, a
               clear all
             </button>
           )}
-          <Tooltip label="Report a bug">
-          <button
-            type="button"
-            onClick={() => setReportOpen(true)}
-            className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider text-white/30 hover:text-red-300/70 transition-colors"
-          >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-            report bug
-          </button>
-          </Tooltip>
         </div>
       </div>
-
-      <ReportBugModal
-        open={reportOpen}
-        onClose={() => setReportOpen(false)}
-        officeSlug={activeOfficeSlug}
-        agentId={activeAgentId}
-      />
 
       {!collapsed &&
         errors.map((err) => {

@@ -39,6 +39,7 @@ type Action =
   | { type: "SET_BADGE"; id: string; badge: TabBadge }
   | { type: "SET_MEETING_ID"; id: string; meetingId: string }
   | { type: "REORDER"; fromId: string; toId: string }
+  | { type: "MOVE_TO_END"; id: string }
   | { type: "LOAD_PERSISTED"; state: State };
 
 const STORAGE_KEY = "ri-dock-tabs";
@@ -149,6 +150,14 @@ function reducer(state: State, action: Action): State {
       tabs.splice(to, 0, moved);
       return { ...state, tabs };
     }
+    case "MOVE_TO_END": {
+      const from = state.tabs.findIndex((t) => t.id === action.id);
+      if (from === -1) return state;
+      const tabs = [...state.tabs];
+      const [moved] = tabs.splice(from, 1);
+      tabs.push(moved);
+      return { ...state, tabs };
+    }
     case "LOAD_PERSISTED": {
       // Deduplicate by id (localStorage can accumulate stale dupes)
       const seen = new Set<string>();
@@ -176,6 +185,7 @@ export type DockTabsContextValue = {
   close: (id: string) => void;
   focus: (id: string) => void;
   reorder: (fromId: string, toId: string) => void;
+  moveToEnd: (id: string) => void;
 };
 
 export const DockTabsContext = createContext<DockTabsContextValue | null>(null);
@@ -239,6 +249,7 @@ export function buildDockTabsValue(
   const close = (id: string) => dispatch({ type: "CLOSE", id });
   const focus = (id: string) => dispatch({ type: "FOCUS", id });
   const reorder = (fromId: string, toId: string) => dispatch({ type: "REORDER", fromId, toId });
+  const moveToEnd = (id: string) => dispatch({ type: "MOVE_TO_END", id });
   const focusedTab = state.tabs.find((t) => t.id === state.focusedId) ?? null;
   return {
     tabs: state.tabs,
@@ -250,5 +261,6 @@ export function buildDockTabsValue(
     close,
     focus,
     reorder,
+    moveToEnd,
   };
 }
