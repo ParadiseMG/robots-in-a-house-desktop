@@ -1,0 +1,61 @@
+{
+  "id": "bunker",
+  "name": "The Bunker",
+  "description": "Dark underground command center. Server racks, monitors, and overhead pipes. Built for large ops teams.",
+  "tags": ["dark", "industrial", "large", "command"],
+  "capacity": { "min": 8, "max": 16 },
+  "grid": { "cols": 24, "rows": 18 },
+  "tile": { "w": 32, "h": 32 },
+  "theme": {
+    "floor": "#303034",
+    "floorAlt": "#3c3c42",
+    "wall": "#18181c",
+    "deskTop": "#4a4a50",
+    "deskSide": "#303034",
+    "accent": "#2674d4",
+    "highlight": "#5aa0ff",
+    "bg": "#1a2030",
+    "paletteFilter": {
+      "hue": -5,
+      "saturation": 0.9,
+      "brightness": 1,
+      "contrast": 1.05
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [4, 33],
+      "monitor": [12, 30]
+    },
+    "premadeRoom": {
+      "layers": [
+        "ops_bunker_v2_layer1.png",
+        "ops_bunker_v2_layer2.png"
+      ],
+      "pixelWidth": 384,
+      "pixelHeight": 288,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Control Room", "gridX": 2, "gridY": 2, "w": 20, "h": 14 }
+  ],
+  "desks": [
+    { "gridX": 11, "gridY": 3, "facing": "S", "label": "command center" },
+    { "gridX": 6, "gridY": 3, "facing": "S", "label": "command left" },
+    { "gridX": 16, "gridY": 3, "facing": "S", "label": "command right" },
+    { "gridX": 5, "gridY": 5, "facing": "S" },
+    { "gridX": 10, "gridY": 5, "facing": "S" },
+    { "gridX": 18, "gridY": 5, "facing": "S" },
+    { "gridX": 3, "gridY": 9, "facing": "S" },
+    { "gridX": 8, "gridY": 9, "facing": "S" },
+    { "gridX": 13, "gridY": 9, "facing": "S" },
+    { "gridX": 18, "gridY": 9, "facing": "S" },
+    { "gridX": 4, "gridY": 13, "facing": "S" },
+    { "gridX": 10, "gridY": 13, "facing": "S" },
+    { "gridX": 13, "gridY": 13, "facing": "S" },
+    { "gridX": 16, "gridY": 13, "facing": "S" },
+    { "gridX": 19, "gridY": 13, "facing": "S" }
+  ],
+  "preview": null
+}

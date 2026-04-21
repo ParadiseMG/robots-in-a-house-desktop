@@ -81,6 +81,24 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   const newRound = (Math.max(...memberData.map((a) => a.runs.length), 0)) + 1;
 
+  // Collect undelivered user messages (sent since last round)
+  type UserMsgRow = { id: string; message: string; sent_at: number };
+  const undeliveredMsgs = d
+    .prepare(
+      "SELECT id, message, sent_at FROM groupchat_user_messages WHERE groupchat_id = ? AND delivered_in_round IS NULL ORDER BY sent_at ASC",
+    )
+    .all(groupchatId) as UserMsgRow[];
+
+  // Mark them as delivered in this round
+  if (undeliveredMsgs.length > 0) {
+    const markDelivered = d.prepare(
+      "UPDATE groupchat_user_messages SET delivered_in_round = ?, delivered_at = ? WHERE id = ?",
+    );
+    for (const msg of undeliveredMsgs) {
+      markDelivered.run(newRound, Date.now(), msg.id);
+    }
+  }
+
   // Build peer texts for cross-talk prompt
   const peerTexts = new Map<string, { name: string; role: string; text: string }>();
   for (const mem of memberData) {
@@ -94,6 +112,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     });
   }
 
+  // Combine inline humanMessage (from round body) + queued user messages
+  const allHumanMessages: string[] = [];
+  if (humanMessage) allHumanMessages.push(humanMessage);
+  for (const msg of undeliveredMsgs) {
+    allHumanMessages.push(msg.message);
+  }
+
   const runResults: Array<{ agentId: string; officeSlug: string; assignmentId: string; runId: string | null }> = [];
 
   await Promise.all(
@@ -103,13 +128,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         .map(([, p]) => `### ${p.name} (${p.role})\n${p.text}`)
         .join("\n\n");
 
-      const humanBlock = humanMessage
-        ? `\n\n### Connor (human)\n${humanMessage}`
+      const humanBlock = allHumanMessages.length > 0
+        ? `\n\n### Connor (human)\n${allHumanMessages.join("\n\n")}`
         : "";
 
       const prompt = peerTexts.size > 0
         ? `The team just shared their latest takes. Here's what your peers said:\n\n${peers}${humanBlock}\n\nReact: where do you agree, where do you push back, what's still unclear? Keep it tight — one paragraph max.`
-        : humanMessage ?? gc.prompt;
+        : allHumanMessages.join("\n\n") || gc.prompt;
 
       const sessionId = mem.latestRun?.session_id ?? null;
 

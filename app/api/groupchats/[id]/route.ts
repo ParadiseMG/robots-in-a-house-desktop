@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { db } from "@/server/db";
+import { db, getAllGroupchatMessages } from "@/server/db";
 
 export const dynamic = "force-dynamic";
 
@@ -118,6 +118,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     }
   }
 
+  const userMessages = getAllGroupchatMessages(groupchatId);
+
   return NextResponse.json({
     groupchatId,
     convenedBy: gc.convened_by,
@@ -131,5 +133,6 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     targetRounds: gc.target_rounds ?? 1,
     members,
     synthesis,
+    userMessages,
   });
 }

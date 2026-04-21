@@ -1,0 +1,46 @@
+{
+  "id": "japanese-lounge",
+  "name": "Japanese Lounge",
+  "description": "Warm wood floors, paper screens, and low furniture. Intimate and focused.",
+  "tags": ["cozy", "warm", "wood", "small"],
+  "capacity": { "min": 2, "max": 6 },
+  "grid": { "cols": 19, "rows": 14 },
+  "tile": { "w": 48, "h": 48 },
+  "theme": {
+    "floor": "#c4965a",
+    "floorAlt": "#d4a96a",
+    "wall": "#8b6a42",
+    "deskTop": "#e8c880",
+    "deskSide": "#c2985a",
+    "accent": "#ffdd88",
+    "highlight": "#fff5aa",
+    "bg": "#4a3520",
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [8, 33],
+      "monitor": [10, 30]
+    },
+    "premadeRoom": {
+      "layers": [
+        "paradise_japanese_lounge_layer1.png",
+        "paradise_japanese_lounge_layer2.png"
+      ],
+      "pixelWidth": 304,
+      "pixelHeight": 214,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Main", "gridX": 1, "gridY": 1, "w": 17, "h": 12 }
+  ],
+  "desks": [
+    { "gridX": 9, "gridY": 3, "facing": "S", "label": "head seat" },
+    { "gridX": 5, "gridY": 5, "facing": "S" },
+    { "gridX": 13, "gridY": 5, "facing": "S" },
+    { "gridX": 7, "gridY": 8, "facing": "S" },
+    { "gridX": 11, "gridY": 8, "facing": "S" },
+    { "gridX": 9, "gridY": 10, "facing": "S" }
+  ],
+  "preview": "paradise_japanese_lounge_preview.png"
+}

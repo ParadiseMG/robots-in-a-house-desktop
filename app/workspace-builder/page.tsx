@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { OfficeConfig, DeskConfig, AgentConfig } from "@/lib/office-types";
+import type { OfficeConfig, DeskConfig, AgentConfig, RoomTemplate } from "@/lib/office-types";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -440,6 +440,17 @@ export default function WorkspaceBuilderPage() {
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [dirty, setDirty] = useState(false);
 
+  // Template picker state
+  const [templates, setTemplates] = useState<RoomTemplate[] | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerStep, setPickerStep] = useState<"pick" | "name">("pick");
+  const [pickerTemplate, setPickerTemplate] = useState<RoomTemplate | null>(null);
+  const [pickerName, setPickerName] = useState("");
+  const [pickerSlug, setPickerSlug] = useState("");
+  const [pickerSlugTouched, setPickerSlugTouched] = useState(false);
+  const [pickerError, setPickerError] = useState<string | null>(null);
+  const [pickerCreating, setPickerCreating] = useState(false);
+
   // Load data
   useEffect(() => {
     Promise.all([
@@ -467,44 +478,80 @@ export default function WorkspaceBuilderPage() {
     setDirty(false);
   }, [allConfigs, dirty]);
 
-  // Create new office
-  const createNewOffice = useCallback(() => {
-    const name = prompt("Office name:");
-    if (!name?.trim()) return;
-    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    if (!slug) return;
+  // Open template picker
+  const openTemplatePicker = useCallback(() => {
+    setPickerStep("pick");
+    setPickerTemplate(null);
+    setPickerName("");
+    setPickerSlug("");
+    setPickerSlugTouched(false);
+    setPickerError(null);
+    setPickerOpen(true);
+    // Fetch templates if not loaded yet
+    if (!templates) {
+      fetch("/api/templates")
+        .then((r) => r.json())
+        .then((d: { templates: RoomTemplate[] }) => setTemplates(d.templates ?? []))
+        .catch(() => setTemplates([]));
+    }
+  }, [templates]);
+
+  const selectTemplate = useCallback((tmpl: RoomTemplate) => {
+    setPickerTemplate(tmpl);
+    setPickerName("");
+    setPickerSlug("");
+    setPickerSlugTouched(false);
+    setPickerError(null);
+    setPickerStep("name");
+  }, []);
+
+  const handlePickerNameChange = useCallback((v: string) => {
+    setPickerName(v);
+    if (!pickerSlugTouched) {
+      setPickerSlug(v.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""));
+    }
+  }, [pickerSlugTouched]);
+
+  const instantiateTemplate = useCallback(async () => {
+    if (!pickerTemplate || !pickerName.trim() || !pickerSlug.trim()) return;
+    const slug = pickerSlug.trim();
     if (allConfigs && allConfigs[slug]) {
-      alert("An office with that slug already exists.");
+      setPickerError(`Slug "${slug}" is already taken.`);
       return;
     }
     if (dirty && !confirm("Unsaved changes. Continue?")) return;
 
-    const newConfig: OfficeConfig = {
-      slug,
-      name: name.trim(),
-      theme: {
-        floor: "#303034",
-        floorAlt: "#3c3c42",
-        wall: "#18181c",
-        deskTop: "#4a4a50",
-        deskSide: "#303034",
-        accent: "#5aa0ff",
-        highlight: "#88bbff",
-        bg: "#1a2030",
-      },
-      tile: { w: 32, h: 32 },
-      grid: { cols: 20, rows: 14 },
-      rooms: [{ id: "main", name: "Main", gridX: 1, gridY: 1, w: 8, h: 6 }],
-      desks: [],
-      agents: [],
-    };
-
-    setAllConfigs((prev) => prev ? { ...prev, [slug]: structuredClone(newConfig) } : { [slug]: structuredClone(newConfig) });
-    setActiveSlug(slug);
-    setConfig(newConfig);
-    setSelectedAgentId(null);
-    setDirty(true);
-  }, [allConfigs, dirty]);
+    setPickerCreating(true);
+    setPickerError(null);
+    try {
+      const res = await fetch("/api/templates/instantiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          templateId: pickerTemplate.id,
+          slug,
+          name: pickerName.trim(),
+          addToStation: true,
+        }),
+      });
+      const data = (await res.json()) as { office?: OfficeConfig; created?: boolean; error?: string };
+      if (!res.ok || !data.office) {
+        setPickerError(data.error ?? `Server error (${res.status})`);
+        return;
+      }
+      const newCfg = data.office;
+      setAllConfigs((prev) => prev ? { ...prev, [slug]: structuredClone(newCfg) } : { [slug]: structuredClone(newCfg) });
+      setActiveSlug(slug);
+      setConfig(structuredClone(newCfg));
+      setSelectedAgentId(null);
+      setDirty(false);
+      setPickerOpen(false);
+    } catch (e) {
+      setPickerError(String(e));
+    } finally {
+      setPickerCreating(false);
+    }
+  }, [pickerTemplate, pickerName, pickerSlug, allConfigs, dirty]);
 
   // Auto-save: debounced write after every config change
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -709,9 +756,9 @@ export default function WorkspaceBuilderPage() {
             </button>
           ))}
           <button
-            onClick={createNewOffice}
+            onClick={openTemplatePicker}
             className="flex-shrink-0 px-4 py-2 text-[11px] text-white/20 hover:text-white/50 hover:bg-gray-900/50 transition-all border-l border-white/5"
-            title="Create new office"
+            title="Create new office from template"
           >
             +
           </button>
@@ -729,6 +776,213 @@ export default function WorkspaceBuilderPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Template picker modal ──────────────────────────────────── */}
+      {pickerOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75"
+          onClick={(e) => { if (e.target === e.currentTarget) setPickerOpen(false); }}
+        >
+          <div className="relative flex w-[680px] max-h-[80vh] flex-col rounded-xl border border-white/10 bg-gray-950 shadow-2xl overflow-hidden">
+            {/* Modal header */}
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-3 flex-shrink-0">
+              <div className="flex items-center gap-2">
+                {pickerStep === "name" && (
+                  <button
+                    onClick={() => setPickerStep("pick")}
+                    className="mr-1 text-[10px] text-white/30 hover:text-white/60 transition-colors"
+                  >
+                    ← back
+                  </button>
+                )}
+                <span className="text-[11px] font-bold text-white">
+                  {pickerStep === "pick" ? "Choose a Template" : `Configure — ${pickerTemplate?.name}`}
+                </span>
+              </div>
+              <button
+                onClick={() => setPickerOpen(false)}
+                className="text-[10px] text-white/20 hover:text-white/50 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Step 1: template grid */}
+            {pickerStep === "pick" && (
+              <div className="overflow-y-auto p-4">
+                {!templates ? (
+                  <div className="flex items-center justify-center py-12 text-[10px] text-white/20">
+                    Loading templates…
+                  </div>
+                ) : templates.length === 0 ? (
+                  <div className="flex items-center justify-center py-12 text-[10px] text-white/20">
+                    No templates found.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 gap-3">
+                    {templates.map((tmpl) => {
+                      const previewLayer =
+                        tmpl.preview
+                          ? tmpl.preview
+                          : tmpl.theme.premadeRoom?.layers?.[0] ?? null;
+                      return (
+                        <button
+                          key={tmpl.id}
+                          onClick={() => selectTemplate(tmpl)}
+                          className="flex flex-col rounded-lg border border-white/8 bg-gray-900/60 hover:border-yellow-400/30 hover:bg-gray-900 text-left transition-all overflow-hidden group"
+                        >
+                          {/* Preview image */}
+                          <div className="relative h-[72px] w-full overflow-hidden bg-gray-900 flex-shrink-0">
+                            {previewLayer ? (
+                              <img
+                                src={`/sprites/interiors/premade_rooms/${previewLayer}`}
+                                alt={tmpl.name}
+                                className="w-full h-full object-cover"
+                                style={{ imageRendering: "pixelated" }}
+                              />
+                            ) : (
+                              <div
+                                className="w-full h-full"
+                                style={{ backgroundColor: tmpl.theme.bg || "#1a1a2e" }}
+                              />
+                            )}
+                            <div className="absolute inset-0 bg-gradient-to-b from-transparent to-gray-900/70" />
+                          </div>
+                          {/* Card body */}
+                          <div className="flex flex-col gap-1.5 p-2.5 flex-1">
+                            <div className="text-[11px] font-bold text-white group-hover:text-yellow-400 transition-colors truncate">
+                              {tmpl.name}
+                            </div>
+                            <div className="text-[9px] text-white/35 leading-snug line-clamp-2">
+                              {tmpl.description}
+                            </div>
+                            {/* Tags */}
+                            {tmpl.tags.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-0.5">
+                                {tmpl.tags.slice(0, 3).map((tag) => (
+                                  <span
+                                    key={tag}
+                                    className="rounded-full border border-white/10 px-1.5 py-0.5 text-[7px] text-white/25"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {/* Stats row */}
+                            <div className="flex gap-3 mt-auto pt-1 text-[8px] text-white/20">
+                              <span>{tmpl.capacity.min}–{tmpl.capacity.max} agents</span>
+                              <span>{tmpl.grid.cols}×{tmpl.grid.rows}</span>
+                              <span>{tmpl.desks.length} desks</span>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Step 2: name + slug + create */}
+            {pickerStep === "name" && pickerTemplate && (
+              <div className="flex flex-col gap-4 p-5 overflow-y-auto">
+                {/* Template summary */}
+                <div className="flex gap-3 rounded-lg border border-white/8 bg-gray-900/60 overflow-hidden">
+                  {(() => {
+                    const layer =
+                      pickerTemplate.preview
+                        ? pickerTemplate.preview
+                        : pickerTemplate.theme.premadeRoom?.layers?.[0] ?? null;
+                    return layer ? (
+                      <img
+                        src={`/sprites/interiors/premade_rooms/${layer}`}
+                        alt={pickerTemplate.name}
+                        className="w-24 h-16 object-cover flex-shrink-0"
+                        style={{ imageRendering: "pixelated" }}
+                      />
+                    ) : (
+                      <div
+                        className="w-24 h-16 flex-shrink-0"
+                        style={{ backgroundColor: pickerTemplate.theme.bg || "#1a1a2e" }}
+                      />
+                    );
+                  })()}
+                  <div className="flex flex-col justify-center gap-1 py-2 pr-3">
+                    <div className="text-[11px] font-bold text-white">{pickerTemplate.name}</div>
+                    <div className="text-[9px] text-white/35">{pickerTemplate.description}</div>
+                    <div className="text-[8px] text-white/20">
+                      {pickerTemplate.capacity.min}–{pickerTemplate.capacity.max} agents · {pickerTemplate.grid.cols}×{pickerTemplate.grid.rows} grid · {pickerTemplate.desks.length} pre-placed desks
+                    </div>
+                  </div>
+                </div>
+
+                {/* Name input */}
+                <div>
+                  <label className="text-[9px] text-white/30 mb-1 block">Office Name</label>
+                  <input
+                    autoFocus
+                    type="text"
+                    value={pickerName}
+                    onChange={(e) => handlePickerNameChange(e.target.value)}
+                    placeholder="e.g. Design Studio"
+                    className="w-full rounded-md border border-white/10 bg-gray-900 px-3 py-2 text-[11px] text-white outline-none focus:border-yellow-400/40"
+                    onKeyDown={(e) => { if (e.key === "Enter") void instantiateTemplate(); }}
+                  />
+                </div>
+
+                {/* Slug input */}
+                <div>
+                  <label className="text-[9px] text-white/30 mb-1 block">Slug (URL id)</label>
+                  <input
+                    type="text"
+                    value={pickerSlug}
+                    onChange={(e) => {
+                      setPickerSlugTouched(true);
+                      setPickerSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"));
+                    }}
+                    placeholder="e.g. design-studio"
+                    className="w-full rounded-md border border-white/10 bg-gray-900 px-3 py-2 text-[11px] text-white/60 outline-none focus:border-yellow-400/40 font-mono"
+                    onKeyDown={(e) => { if (e.key === "Enter") void instantiateTemplate(); }}
+                  />
+                  {allConfigs && pickerSlug && allConfigs[pickerSlug] && (
+                    <div className="mt-1 text-[8px] text-red-400">Slug already in use.</div>
+                  )}
+                </div>
+
+                {/* Error */}
+                {pickerError && (
+                  <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-[10px] text-red-400">
+                    {pickerError}
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={() => setPickerOpen(false)}
+                    className="flex-1 rounded-md border border-white/10 py-2 text-[10px] text-white/30 hover:text-white/60 hover:border-white/20 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => void instantiateTemplate()}
+                    disabled={
+                      !pickerName.trim() ||
+                      !pickerSlug.trim() ||
+                      pickerCreating ||
+                      !!(allConfigs && pickerSlug && allConfigs[pickerSlug])
+                    }
+                    className="flex-1 rounded-md bg-yellow-400/15 border border-yellow-400/30 py-2 text-[10px] font-bold text-yellow-400 hover:bg-yellow-400/25 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    {pickerCreating ? "Creating…" : "Create Office"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── RIGHT: Config panel ─────────────────────────────────────── */}
       <div className="flex w-[380px] flex-shrink-0 flex-col overflow-hidden">

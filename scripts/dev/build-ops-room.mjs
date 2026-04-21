@@ -15,7 +15,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, "..");
+const ROOT = join(__dirname, "../..");
 const TILE = 16;
 const COLS = 24;
 const ROWS = 18;
@@ -62,34 +62,28 @@ async function buildLayer1() {
   };
 
   // === FLOOR ===
-  // Dark walls around perimeter, dark floor interior
+  // Single-tile wall border, floor fills the rest
   for (let gy = 0; gy < ROWS; gy++) {
     for (let gx = 0; gx < COLS; gx++) {
       const isWall = gy === 0 || gy === ROWS - 1 || gx === 0 || gx === COLS - 1;
-      const isTrim = gy === 1 || gy === ROWS - 2 || gx === 1 || gx === COLS - 2;
 
       if (isWall) {
-        place(await solidTile("#101014"), gx, gy);
-      } else if (isTrim) {
-        // Blue accent trim along inner wall
-        place(await solidTile("#15202e"), gx, gy);
+        // Thin dark wall — just 1 tile, no separate trim layer
+        place(await solidTile("#1a1a22"), gx, gy);
       } else {
         // Floor — subtle checkerboard
         const dark = (gx + gy) % 2 === 0;
-        place(await solidTile(dark ? "#25252c" : "#2b2b34"), gx, gy);
+        place(await solidTile(dark ? "#383844" : "#40404e"), gx, gy);
       }
     }
   }
 
-  // Corner accent dots (bright blue)
-  for (const [cx, cy] of [[1, 1], [COLS - 2, 1], [1, ROWS - 2], [COLS - 2, ROWS - 2]]) {
-    place(await solidTile("#2674d4"), cx, cy);
-  }
+  // (accent lines and corner accents removed — too prominent at 2x scale)
 
   // Center aisle highlight (slightly different floor tone)
   for (let gy = 3; gy < ROWS - 3; gy++) {
-    place(await solidTile("#222230"), 11, gy);
-    place(await solidTile("#222230"), 12, gy);
+    place(await solidTile("#34343f"), 11, gy);
+    place(await solidTile("#34343f"), 12, gy);
   }
 
   // === NORTH WALL: "THE BIG BOARD" ===
@@ -198,7 +192,7 @@ async function buildLayer1() {
 
   // === BUILD ===
   const base = sharp({
-    create: { width: W, height: H, channels: 4, background: { r: 16, g: 16, b: 20, alpha: 255 } },
+    create: { width: W, height: H, channels: 4, background: { r: 26, g: 26, b: 32, alpha: 255 } },
   }).png();
 
   const outPath = join(OUT_DIR, "ops_bunker_v2_layer1.png");

@@ -1,0 +1,54 @@
+{
+  "id": "museum",
+  "name": "Museum Gallery",
+  "description": "Tall ceilings, display cases, and polished floors. A refined space for a focused team.",
+  "tags": ["elegant", "tall", "cool", "medium"],
+  "capacity": { "min": 3, "max": 8 },
+  "grid": { "cols": 17, "rows": 21 },
+  "tile": { "w": 32, "h": 32 },
+  "theme": {
+    "floor": "#2a2a30",
+    "floorAlt": "#353540",
+    "wall": "#1a1a20",
+    "deskTop": "#4a4a55",
+    "deskSide": "#35353c",
+    "accent": "#8888cc",
+    "highlight": "#aaaaee",
+    "bg": "#12121a",
+    "paletteFilter": {
+      "hue": -10,
+      "saturation": 0.8,
+      "brightness": 0.95,
+      "contrast": 1.05
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [4, 33],
+      "monitor": [12, 30]
+    },
+    "premadeRoom": {
+      "layers": [
+        "dontcall_museum_room3_layer1.png",
+        "dontcall_museum_room3_layer2.png"
+      ],
+      "pixelWidth": 272,
+      "pixelHeight": 336,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Gallery", "gridX": 1, "gridY": 2, "w": 15, "h": 17 }
+  ],
+  "desks": [
+    { "gridX": 8, "gridY": 4, "facing": "S", "label": "head seat" },
+    { "gridX": 4, "gridY": 7, "facing": "S" },
+    { "gridX": 12, "gridY": 7, "facing": "S" },
+    { "gridX": 3, "gridY": 11, "facing": "S" },
+    { "gridX": 8, "gridY": 11, "facing": "S" },
+    { "gridX": 13, "gridY": 11, "facing": "S" },
+    { "gridX": 5, "gridY": 15, "facing": "S" },
+    { "gridX": 11, "gridY": 15, "facing": "S" }
+  ],
+  "preview": "dontcall_museum_room3_preview.png"
+}

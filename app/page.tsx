@@ -289,7 +289,7 @@ function HomeInner() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [focusModule]);
+  }, [focusModule, order]);
 
   const selectDesk = useCallback(
     (deskId: string | null, officeSlug?: string) => {
@@ -306,9 +306,10 @@ function HomeInner() {
     [sidebarSlug],
   );
 
-  // G toggles grid overlay
+  // G toggles grid overlay (canvas view only — grid view uses G for select mode)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (viewMode !== "canvas") return;
       if (e.key.toLowerCase() !== "g") return;
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea") return;
@@ -316,7 +317,7 @@ function HomeInner() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [viewMode]);
 
   // Fetch tasks for sidebar office
   useEffect(() => {
@@ -521,6 +522,7 @@ function HomeInner() {
       officeSlug: string; officeName: string; accent: string;
       premade: string | null; status: string | null;
       activeDelegations: number; teamSize: number; isHead: boolean;
+      isDeptHead: boolean;
     }> = [];
     for (const slug of order) {
       const office = offices[slug];
@@ -543,6 +545,7 @@ function HomeInner() {
           activeDelegations: entry?.activeDelegations ?? 0,
           teamSize,
           isHead: a.isHead ?? false,
+          isDeptHead: a.isDeptHead ?? false,
         });
       }
     }
@@ -561,17 +564,36 @@ function HomeInner() {
       return JSON.parse(localStorage.getItem("ri-quickview-pins") ?? "[]");
     } catch { return []; }
   });
+  // Hidden agent IDs — allows removing heads from quick view
+  const [quickViewHidden, setQuickViewHidden] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      return JSON.parse(localStorage.getItem("ri-quickview-hidden") ?? "[]");
+    } catch { return []; }
+  });
   const pinAgent = (id: string) => {
+    // Add to pins + unhide if previously hidden
     setQuickViewPins((prev) => {
-      const next = [...prev, id];
+      const next = prev.includes(id) ? prev : [...prev, id];
       localStorage.setItem("ri-quickview-pins", JSON.stringify(next));
+      return next;
+    });
+    setQuickViewHidden((prev) => {
+      const next = prev.filter((h) => h !== id);
+      localStorage.setItem("ri-quickview-hidden", JSON.stringify(next));
       return next;
     });
   };
   const unpinAgent = (id: string) => {
+    // Remove from pins + add to hidden (so heads stay gone)
     setQuickViewPins((prev) => {
       const next = prev.filter((p) => p !== id);
       localStorage.setItem("ri-quickview-pins", JSON.stringify(next));
+      return next;
+    });
+    setQuickViewHidden((prev) => {
+      const next = prev.includes(id) ? prev : [...prev, id];
+      localStorage.setItem("ri-quickview-hidden", JSON.stringify(next));
       return next;
     });
   };
@@ -794,6 +816,9 @@ function HomeInner() {
       deskId: a.deskId,
       isReal: a.isReal,
       officeSlug: a.officeSlug,
+      model: a.model ?? null,
+      isHead: a.isHead ?? false,
+      isDeptHead: a.isDeptHead ?? false,
     }));
   }, [allAgentsWithSlug]);
 
@@ -867,7 +892,40 @@ function HomeInner() {
         </div>
       </header>
       <HealthBanner />
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className={`flex flex-1 overflow-hidden ${viewMode === "grid" ? "flex-row" : "flex-col"}`}>
+          {viewMode === "grid" ? (
+            /* ── Grid view: side-by-side layout ── */
+            <HeadsView
+              heads={headAgents}
+              pinnedIds={quickViewPins}
+              hiddenIds={quickViewHidden}
+              allAgents={allQuickViewAgents}
+              tabOrder={tabs.filter((t) => t.kind === "1:1" && t.agentId).map((t) => t.agentId!)}
+              onChat={(agent) => {
+                openOrFocus({
+                  id: agent.id,
+                  agentId: agent.id,
+                  deskId: agent.deskId,
+                  officeSlug: agent.officeSlug,
+                  kind: "1:1",
+                  label: agent.name,
+                });
+              }}
+              onPin={pinAgent}
+              onUnpin={unpinAgent}
+              onReorder={(fromId, toId) => {
+                reorder(fromId, toId);
+              }}
+              onSwitchView={() => {
+                setViewMode("canvas");
+                localStorage.setItem("ri-view-mode", "canvas");
+              }}
+              onSettings={() => setShowSettings((v) => !v)}
+              onOpenGroupchat={(label, groupchatId) => openGroupchat(label, groupchatId)}
+              onNewGroupchat={() => openGroupchat("New Groupchat")}
+            />
+          ) : (
+          <>
           <main
             className="relative min-h-0 flex-1 overflow-hidden"
             ref={officeContainerRef}
@@ -894,14 +952,13 @@ function HomeInner() {
                 </svg>
               </button>
               </Tooltip>
-              <Tooltip label={viewMode === "canvas" ? "Switch to grid view" : "Switch to canvas view"} position="bottom">
+              <Tooltip label="Switch to grid view" position="bottom">
               <button
                 type="button"
-                onClick={() => setViewMode((v) => {
-                  const next = v === "canvas" ? "grid" : "canvas";
-                  localStorage.setItem("ri-view-mode", next);
-                  return next;
-                })}
+                onClick={() => {
+                  setViewMode("grid");
+                  localStorage.setItem("ri-view-mode", "grid");
+                }}
                 className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
               >
                 <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
@@ -960,7 +1017,7 @@ function HomeInner() {
               </Tooltip>
             </div>
             {/* To-do list — top-left, below toolbar (canvas view only) */}
-            {viewMode === "canvas" && focusedModule && (
+            {focusedModule && (
               <div className="pointer-events-auto absolute left-3 top-14 z-20 w-64">
                 <OfficeTodos
                   officeSlug={focusedModule}
@@ -968,30 +1025,6 @@ function HomeInner() {
                 />
               </div>
             )}
-            {viewMode === "grid" ? (
-              <HeadsView
-                heads={headAgents}
-                pinnedIds={quickViewPins}
-                allAgents={allQuickViewAgents}
-                tabOrder={tabs.filter((t) => t.kind === "1:1" && t.agentId).map((t) => t.agentId!)}
-                onChat={(agent) => {
-                  openOrFocus({
-                    id: agent.id,
-                    agentId: agent.id,
-                    deskId: agent.deskId,
-                    officeSlug: agent.officeSlug,
-                    kind: "1:1",
-                    label: agent.name,
-                  });
-                }}
-                onPin={pinAgent}
-                onUnpin={unpinAgent}
-                onReorder={(fromId, toId) => {
-                  // Reorder dock tabs to match card drag
-                  reorder(fromId, toId);
-                }}
-              />
-            ) : (<>
             <Station
               station={station}
               offices={offices}
@@ -1104,7 +1137,6 @@ function HomeInner() {
                 );
               })}
             </div>
-            </>)}
           </main>
           {hoverCard && (() => {
             const agent = agentByDesk.get(hoverCard.deskId);
@@ -1179,6 +1211,37 @@ function HomeInner() {
               void refetchRoster();
             }}
           />
+          </>
+          )}
+
+          {/* ── Grid view: dock as right-side panel ── */}
+          {viewMode === "grid" && (
+            <div className="flex h-full w-[380px] shrink-0 flex-col border-l border-white/10 bg-zinc-950">
+              <ChatDock
+                agents={allAgentsForDock}
+                rosterEntries={rosterEntries ?? []}
+                offices={offices}
+                deskRunStatus={deskRunStatus}
+                activeOfficeSlug={sidebarSlug}
+                layout="side"
+                onAckDesk={(deskId) => {
+                  const runId = runByDesk.get(deskId);
+                  if (runId) {
+                    void fetch(`/api/runs/${encodeURIComponent(runId)}/ack`, { method: "POST" })
+                      .then(() => refetchRoster())
+                      .catch(() => {});
+                  }
+                }}
+              />
+              <PromptBar
+                agents={allAgentsWithSlug}
+                onSent={({ deskId, isReal }) => {
+                  if (isReal) selectDesk(deskId);
+                  void refetchRoster();
+                }}
+              />
+            </div>
+          )}
       </div>
       <CommandPalette
         slug={sidebarSlug}

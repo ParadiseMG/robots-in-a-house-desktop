@@ -1,0 +1,57 @@
+{
+  "id": "beach",
+  "name": "Beach",
+  "description": "Sand, surf, and umbrellas. Agents work on beach towels under the sun.",
+  "tags": ["tropical", "bright", "outdoor", "large"],
+  "capacity": { "min": 4, "max": 10 },
+  "grid": { "cols": 24, "rows": 16 },
+  "tile": { "w": 48, "h": 48 },
+  "theme": {
+    "floor": "#d4a96a",
+    "floorAlt": "#e8c080",
+    "wall": "#7ac8e0",
+    "deskTop": "#e8c880",
+    "deskSide": "#c2985a",
+    "accent": "#ffdd88",
+    "highlight": "#fff5aa",
+    "bg": "#7ac8e0",
+    "paletteFilter": {
+      "hue": 12,
+      "saturation": 1.1,
+      "brightness": 1.05,
+      "contrast": 1,
+      "tint": "#f5c842",
+      "tintStrength": 0.08
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [8, 33],
+      "monitor": [10, 30],
+      "chairType": "towel",
+      "towelColor": "#f59e0b"
+    },
+    "premadeRoom": {
+      "layers": ["paradise_beach_layer1.png"],
+      "pixelWidth": 384,
+      "pixelHeight": 256,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Beach", "gridX": 1, "gridY": 1, "w": 22, "h": 10 }
+  ],
+  "desks": [
+    { "gridX": 12, "gridY": 1, "facing": "S", "label": "head seat" },
+    { "gridX": 5, "gridY": 3, "facing": "S" },
+    { "gridX": 10, "gridY": 4, "facing": "S" },
+    { "gridX": 16, "gridY": 3, "facing": "S" },
+    { "gridX": 8, "gridY": 7, "facing": "S" },
+    { "gridX": 13, "gridY": 6, "facing": "S" },
+    { "gridX": 18, "gridY": 7, "facing": "S" },
+    { "gridX": 4, "gridY": 9, "facing": "S" },
+    { "gridX": 11, "gridY": 9, "facing": "S" },
+    { "gridX": 19, "gridY": 5, "facing": "S" }
+  ],
+  "preview": null
+}

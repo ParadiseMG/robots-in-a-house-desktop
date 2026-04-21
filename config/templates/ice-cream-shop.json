@@ -1,0 +1,48 @@
+{
+  "id": "ice-cream-shop",
+  "name": "Ice Cream Shop",
+  "description": "Bright, cheerful storefront with counter seating. Fun and casual for a small team.",
+  "tags": ["bright", "fun", "small", "casual"],
+  "capacity": { "min": 2, "max": 5 },
+  "grid": { "cols": 12, "rows": 10 },
+  "tile": { "w": 32, "h": 32 },
+  "theme": {
+    "floor": "#e8d8c0",
+    "floorAlt": "#f0e0c8",
+    "wall": "#c8a882",
+    "deskTop": "#f5e0b8",
+    "deskSide": "#d4b888",
+    "accent": "#ff8899",
+    "highlight": "#ffaabb",
+    "bg": "#f5e8d0",
+    "paletteFilter": {
+      "hue": 5,
+      "saturation": 1.15,
+      "brightness": 1.1,
+      "contrast": 0.95
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [8, 33],
+      "monitor": [10, 30]
+    },
+    "premadeRoom": {
+      "layers": ["paradise_icecream_shop_layer1.png"],
+      "pixelWidth": 192,
+      "pixelHeight": 160,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Shop Floor", "gridX": 1, "gridY": 1, "w": 10, "h": 8 }
+  ],
+  "desks": [
+    { "gridX": 6, "gridY": 3, "facing": "S", "label": "counter seat" },
+    { "gridX": 3, "gridY": 5, "facing": "S" },
+    { "gridX": 9, "gridY": 5, "facing": "S" },
+    { "gridX": 4, "gridY": 7, "facing": "S" },
+    { "gridX": 8, "gridY": 7, "facing": "S" }
+  ],
+  "preview": "paradise_icecream_shop_preview.png"
+}

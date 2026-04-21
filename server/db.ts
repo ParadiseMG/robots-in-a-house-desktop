@@ -132,6 +132,16 @@ function migrate(d: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_groupchat_history ON groupchat_history(groupchat_id, created_at);
 
+    CREATE TABLE IF NOT EXISTS groupchat_user_messages (
+      id TEXT PRIMARY KEY,
+      groupchat_id TEXT NOT NULL REFERENCES groupchats(id),
+      message TEXT NOT NULL,
+      sent_at INTEGER NOT NULL,
+      delivered_at INTEGER,
+      delivered_in_round INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_groupchat_user_messages ON groupchat_user_messages(groupchat_id, sent_at);
+
     CREATE TABLE IF NOT EXISTS prompt_queue (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
@@ -906,6 +916,33 @@ export function getToolApprovalByCallId(runId: string, toolCallId: string): Tool
 }
 
 // ---------------------------------------------------------------------------
+// Agent Activity (sparklines)
+// ---------------------------------------------------------------------------
+
+export type RecentRunRow = {
+  agent_id: string;
+  status: string;
+  started_at: number;
+  ended_at: number | null;
+};
+
+/**
+ * Returns the last N terminal runs per agent for a given office.
+ * Used for sparkline rendering in the grid view.
+ */
+export function recentRunsByOffice(officeSlug: string, limit = 8): RecentRunRow[] {
+  return db()
+    .prepare(
+      `SELECT agent_id, status, started_at, ended_at
+       FROM agent_runs
+       WHERE office_slug = ? AND status IN ('done', 'error', 'interrupted')
+       ORDER BY started_at DESC
+       LIMIT ?`,
+    )
+    .all(officeSlug, limit * 30) as RecentRunRow[]; // fetch enough rows, we'll group client-side
+}
+
+// ---------------------------------------------------------------------------
 // Office Todos
 // ---------------------------------------------------------------------------
 
@@ -973,4 +1010,81 @@ export function updateTodo(
 export function deleteTodo(id: string): boolean {
   const result = db().prepare("DELETE FROM office_todos WHERE id = ?").run(id);
   return result.changes > 0;
+}
+
+// ── Groupchat user messages ────────────────────────────────────────────────────
+
+export type GroupchatUserMessage = {
+  id: string;
+  groupchatId: string;
+  message: string;
+  sentAt: number;
+  deliveredAt: number | null;
+  deliveredInRound: number | null;
+};
+
+type GcMsgRow = {
+  id: string;
+  groupchat_id: string;
+  message: string;
+  sent_at: number;
+  delivered_at: number | null;
+  delivered_in_round: number | null;
+};
+
+function rowToMsg(r: GcMsgRow): GroupchatUserMessage {
+  return {
+    id: r.id,
+    groupchatId: r.groupchat_id,
+    message: r.message,
+    sentAt: r.sent_at,
+    deliveredAt: r.delivered_at,
+    deliveredInRound: r.delivered_in_round,
+  };
+}
+
+/** Insert a new user message for a groupchat. Returns the inserted message id. */
+export function insertGroupchatMessage(groupchatId: string, message: string): string {
+  const id = `gcmsg_${crypto.randomUUID()}`;
+  db()
+    .prepare(
+      "INSERT INTO groupchat_user_messages (id, groupchat_id, message, sent_at) VALUES (?, ?, ?, ?)",
+    )
+    .run(id, groupchatId, message, Date.now());
+  return id;
+}
+
+/** Return all undelivered user messages for a groupchat, oldest first. */
+export function getPendingGroupchatMessages(groupchatId: string): GroupchatUserMessage[] {
+  return (
+    db()
+      .prepare(
+        "SELECT * FROM groupchat_user_messages WHERE groupchat_id = ? AND delivered_at IS NULL ORDER BY sent_at ASC",
+      )
+      .all(groupchatId) as GcMsgRow[]
+  ).map(rowToMsg);
+}
+
+/** Return all user messages for a groupchat (delivered + pending), oldest first. */
+export function getAllGroupchatMessages(groupchatId: string): GroupchatUserMessage[] {
+  return (
+    db()
+      .prepare(
+        "SELECT * FROM groupchat_user_messages WHERE groupchat_id = ? ORDER BY sent_at ASC",
+      )
+      .all(groupchatId) as GcMsgRow[]
+  ).map(rowToMsg);
+}
+
+/** Mark a list of message ids as delivered in the given round. */
+export function markGroupchatMessagesDelivered(ids: string[], round: number): void {
+  if (ids.length === 0) return;
+  const now = Date.now();
+  const stmt = db().prepare(
+    "UPDATE groupchat_user_messages SET delivered_at = ?, delivered_in_round = ? WHERE id = ?",
+  );
+  const tx = db().transaction(() => {
+    for (const id of ids) stmt.run(now, round, id);
+  });
+  tx();
 }

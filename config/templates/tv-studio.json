@@ -1,0 +1,44 @@
+{
+  "id": "tv-studio",
+  "name": "TV Studio",
+  "description": "Compact broadcast studio with cameras and lighting rigs. Great for a tight 2-4 person team.",
+  "tags": ["compact", "media", "small"],
+  "capacity": { "min": 2, "max": 4 },
+  "grid": { "cols": 11, "rows": 10 },
+  "tile": { "w": 32, "h": 32 },
+  "theme": {
+    "floor": "#252530",
+    "floorAlt": "#303040",
+    "wall": "#181820",
+    "deskTop": "#3a3a45",
+    "deskSide": "#2a2a35",
+    "accent": "#e04040",
+    "highlight": "#ff6060",
+    "bg": "#0f0f18",
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [4, 33],
+      "monitor": [12, 30]
+    },
+    "premadeRoom": {
+      "layers": [
+        "dontcall_tv_studio_layer1.png",
+        "dontcall_tv_studio_layer2.png"
+      ],
+      "pixelWidth": 176,
+      "pixelHeight": 160,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Studio", "gridX": 1, "gridY": 1, "w": 9, "h": 8 }
+  ],
+  "desks": [
+    { "gridX": 5, "gridY": 3, "facing": "S", "label": "anchor desk" },
+    { "gridX": 2, "gridY": 5, "facing": "S" },
+    { "gridX": 8, "gridY": 5, "facing": "S" },
+    { "gridX": 5, "gridY": 7, "facing": "S" }
+  ],
+  "preview": "dontcall_tv_studio_preview.png"
+}

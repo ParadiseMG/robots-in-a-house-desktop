@@ -1,0 +1,53 @@
+{
+  "id": "neon-lounge",
+  "name": "Neon Lounge",
+  "description": "Dark moody space with warm amber tones. Perfect for a small-to-mid crew that likes the night shift vibe.",
+  "tags": ["dark", "moody", "warm", "medium"],
+  "capacity": { "min": 4, "max": 8 },
+  "grid": { "cols": 24, "rows": 18 },
+  "tile": { "w": 32, "h": 32 },
+  "theme": {
+    "floor": "#0a1410",
+    "floorAlt": "#0f1e17",
+    "wall": "#050807",
+    "deskTop": "#1a2a22",
+    "deskSide": "#0a1713",
+    "accent": "#39ff14",
+    "highlight": "#7fff3c",
+    "bg": "#000000",
+    "paletteFilter": {
+      "hue": 20,
+      "saturation": 0.9,
+      "brightness": 0.95,
+      "contrast": 1.1,
+      "tint": "#d97706",
+      "tintStrength": 0.15
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [6, 35],
+      "monitor": [14, 30]
+    },
+    "premadeRoom": {
+      "layers": ["dontcall_neon_lounge_layer1.png"],
+      "pixelWidth": 384,
+      "pixelHeight": 288,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Lounge", "gridX": 1, "gridY": 1, "w": 22, "h": 16 }
+  ],
+  "desks": [
+    { "gridX": 11, "gridY": 4, "facing": "S", "label": "head seat" },
+    { "gridX": 4, "gridY": 4, "facing": "S" },
+    { "gridX": 19, "gridY": 4, "facing": "S" },
+    { "gridX": 2, "gridY": 9, "facing": "S" },
+    { "gridX": 8, "gridY": 9, "facing": "S" },
+    { "gridX": 14, "gridY": 9, "facing": "S" },
+    { "gridX": 20, "gridY": 9, "facing": "S" },
+    { "gridX": 11, "gridY": 14, "facing": "S" }
+  ],
+  "preview": null
+}
