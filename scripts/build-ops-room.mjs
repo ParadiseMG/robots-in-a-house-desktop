@@ -130,7 +130,15 @@ async function buildLayer1() {
   await bTile(10, 28, 21, 1);
   await bTile(10, 29, 21, 2);
 
-  // === WORKSTATION ROW 1 (rows 5-6) — Command tier ===
+  // === COMMAND TIER (rows 3-4) — Captain, Shell, Switch face the Big Board ===
+  // Desktop monitors + chairs at command positions
+  const commandStations = [6, 11, 16]; // Switch, Captain, Shell grid-x
+  for (const gx of commandStations) {
+    await bTile(12, 30, gx, 3);          // monitor (dark style for command)
+    await bTile(4, 33, gx, 4);           // chair
+  }
+
+  // === WORKSTATION ROW 1 (rows 5-6) ===
   // Desktop monitors: basement row 30, col 12 and 14
   // Chairs: basement row 33, col 4 and 6
   const stations1 = [3, 5, 7, 10, 13, 16, 18, 20]; // grid-x positions
@@ -149,7 +157,7 @@ async function buildLayer1() {
   }
 
   // === WORKSTATION ROW 3 (rows 13-14) — Back tier ===
-  const stations3 = [4, 7, 10, 13, 16, 19];
+  const stations3 = [4, 5, 7, 10, 13, 16, 19]; // added gx=5 for Hammer
   for (const gx of stations3) {
     const monCol = gx % 2 === 0 ? 12 : 14;
     await bTile(monCol, 30, gx, 13);
@@ -223,39 +231,42 @@ async function buildLayer2() {
     return sharp(buf, { raw: { width: TILE, height: TILE, channels: 4 } }).png().toBuffer();
   };
 
-  const light = await makeLightTile(4, 100);
-  const lightDim = await makeLightTile(2, 60);
+  const light = await makeLightTile(6, 140);
+  const lightDim = await makeLightTile(4, 80);
 
-  // Main lights grid
-  for (let gy = 3; gy < ROWS - 3; gy += 4) {
+  // Main lights grid — denser coverage
+  for (let gy = 3; gy < ROWS - 3; gy += 3) {
     for (let gx = 4; gx < COLS - 3; gx += 4) {
       place(light, gx, gy);
     }
   }
-  // Dim fill lights
-  for (let gy = 5; gy < ROWS - 3; gy += 4) {
+  // Fill lights between mains
+  for (let gy = 5; gy < ROWS - 3; gy += 3) {
     for (let gx = 6; gx < COLS - 3; gx += 4) {
       place(lightDim, gx, gy);
     }
   }
 
-  // Horizontal conduit pipes (thin dark lines, semi-transparent)
+  // Horizontal conduit pipes (visible dark lines with blue tint)
   const makePipeTile = async () => {
     const buf = Buffer.alloc(TILE * TILE * 4, 0);
     for (let dx = 0; dx < TILE; dx++) {
-      for (const dy of [7, 8]) {
+      // 4px wide pipe with highlight edge
+      for (const dy of [6, 7, 8, 9]) {
         const idx = (dy * TILE + dx) * 4;
-        buf[idx] = 30;
-        buf[idx + 1] = 35;
-        buf[idx + 2] = 50;
-        buf[idx + 3] = 60;
+        const isEdge = dy === 6 || dy === 9;
+        buf[idx] = isEdge ? 45 : 25;
+        buf[idx + 1] = isEdge ? 55 : 30;
+        buf[idx + 2] = isEdge ? 75 : 45;
+        buf[idx + 3] = isEdge ? 50 : 90;
       }
     }
     return sharp(buf, { raw: { width: TILE, height: TILE, channels: 4 } }).png().toBuffer();
   };
   const pipe = await makePipeTile();
 
-  for (const pipeRow of [4, 11]) {
+  // Three pipe runs across the ceiling
+  for (const pipeRow of [4, 8, 14]) {
     for (let gx = 2; gx < COLS - 2; gx++) {
       place(pipe, gx, pipeRow);
     }

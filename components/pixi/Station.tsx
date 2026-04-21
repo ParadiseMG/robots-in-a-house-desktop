@@ -1158,21 +1158,26 @@ export default function Station({
 
       const computeOverviewTarget = () => {
         // Fit ALL modules into view with padding.
-        let maxX = 0;
-        let maxY = 0;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
         for (const m of modules) {
+          minX = Math.min(minX, m.offsetX);
+          minY = Math.min(minY, m.offsetY);
           maxX = Math.max(maxX, m.offsetX + m.worldW);
           maxY = Math.max(maxY, m.offsetY + m.worldH);
         }
+        if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 100; maxY = 100; }
         const pad = 120;
-        const W = maxX + pad * 2;
-        const H = maxY + pad * 2;
+        const W = (maxX - minX) + pad * 2;
+        const H = (maxY - minY) + pad * 2;
         const scale = Math.min(
           app.renderer.width / W,
           app.renderer.height / H,
         );
-        const centerX = maxX / 2;
-        const centerY = maxY / 2;
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
         cameraTarget.scale = scale;
         cameraTarget.x = app.renderer.width / 2 - centerX * scale;
         cameraTarget.y = app.renderer.height / 2 - centerY * scale;
