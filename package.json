@@ -1,6 +1,6 @@
 {
   "name": "robots-in-a-house",
-  "version": "0.1.0",
+  "version": "0.3.1",
   "private": true,
   "scripts": {
     "predev": "curl -sf -o /dev/null --max-time 1 http://localhost:3000 && { echo 'dev server already healthy on :3000 — skipping predev cleanup'; exit 0; } || { lsof -ti :3000 | xargs -r kill -9 2>/dev/null; pgrep -f 'next dev|agent-runner' | xargs -r kill -9 2>/dev/null; exit 0; }",
