@@ -54,8 +54,12 @@ type Props = {
     gridX: number,
     gridY: number,
   ) => void;
+  onModuleMove?: (
+    officeSlug: string,
+    offsetX: number,
+    offsetY: number,
+  ) => void;
   onModuleFocus?: (officeSlug: string) => void;
-  onWarRoomClick?: (officeSlug: string) => void;
   onAgentHover?: (
     officeSlug: string,
     deskId: string,
@@ -83,8 +87,8 @@ export default function Station({
   onAgentClick,
   onDeskDrop,
   onAgentMove,
+  onModuleMove,
   onModuleFocus,
-  onWarRoomClick,
   onAgentHover,
   onAgentHoverOut,
   onAgentPositions,
@@ -102,10 +106,10 @@ export default function Station({
   onAgentClickRef.current = onAgentClick;
   const onAgentMoveRef = useRef(onAgentMove);
   onAgentMoveRef.current = onAgentMove;
+  const onModuleMoveRef = useRef(onModuleMove);
+  onModuleMoveRef.current = onModuleMove;
   const onModuleFocusRef = useRef(onModuleFocus);
   onModuleFocusRef.current = onModuleFocus;
-  const onWarRoomClickRef = useRef(onWarRoomClick);
-  onWarRoomClickRef.current = onWarRoomClick;
   const onAgentHoverRef = useRef(onAgentHover);
   onAgentHoverRef.current = onAgentHover;
   const onAgentHoverOutRef = useRef(onAgentHoverOut);
@@ -248,6 +252,7 @@ export default function Station({
         deskOfAgent: Map<string, string>;
         premadeRoomConfig: OfficeConfig["theme"]["premadeRoom"];
         tilesheet: boolean;
+        glow: InstanceType<typeof Graphics>;
       };
 
       type AgentSprites = {
@@ -294,7 +299,14 @@ export default function Station({
       };
 
       // Shared drag state — at most one agent dragging at a time across modules.
-      type DragState = {
+      type DragState = PreDrag & {
+        started: boolean;
+      };
+      const DRAG_DIST_THRESHOLD = 12; // px — must drag this far
+      const DRAG_HOLD_MS = 250;       // ms — must hold this long
+
+      // Pre-drag: tracks a pointerdown that hasn't yet committed to a drag
+      type PreDrag = {
         deskId: string;
         officeSlug: string;
         body: InstanceType<typeof AnimatedSprite>;
@@ -303,8 +315,9 @@ export default function Station({
         origY: number;
         startPointerX: number;
         startPointerY: number;
-        started: boolean;
+        startTime: number;
       };
+      let preDrag: PreDrag | null = null;
       let drag: DragState | null = null;
       let htmlDragActive = false;
       const onHtmlDragStart = () => {
@@ -325,6 +338,41 @@ export default function Station({
         started: boolean;
       };
       let pan: PanState | null = null;
+
+      // Module drag state — shift+drag to reposition entire offices
+      type ModuleDragState = {
+        module: ModuleHandle;
+        startPointerX: number;
+        startPointerY: number;
+        origOffsetX: number;
+        origOffsetY: number;
+        started: boolean;
+      };
+      let moduleDrag: ModuleDragState | null = null;
+      let shiftHeld = false;
+      let hoveredModuleHandle: ModuleHandle | null = null;
+      const shiftGlows: Map<string, InstanceType<typeof Graphics>> = new Map();
+
+      const updateModuleHoverCursor = () => {
+        for (const m of modules) {
+          const sg = shiftGlows.get(m.slug);
+          if (!sg) continue;
+          const show = shiftHeld && hoveredModuleHandle === m && !moduleDrag;
+          sg.visible = show;
+          m.container.cursor = show ? "move" : "default";
+        }
+      };
+
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Shift") { shiftHeld = true; updateModuleHoverCursor(); }
+      };
+      const onKeyUp = (e: KeyboardEvent) => {
+        if (e.key === "Shift") { shiftHeld = false; updateModuleHoverCursor(); }
+      };
+      const onWindowBlur = () => { shiftHeld = false; updateModuleHoverCursor(); };
+      document.addEventListener("keydown", onKeyDown);
+      document.addEventListener("keyup", onKeyUp);
+      window.addEventListener("blur", onWindowBlur);
 
       const modules: ModuleHandle[] = [];
 
@@ -402,6 +450,12 @@ export default function Station({
         onAgentClickRef.current?.(officeSlug, deskId, clientX, clientY);
       };
 
+      // Glow layer — sits below all module containers so module content
+      // naturally paints over neighboring glow bleed.
+      const glowLayer = new Container();
+      glowLayer.eventMode = "none";
+      world.addChild(glowLayer);
+
       for (const moduleCfg of station.modules) {
         const office = offices[moduleCfg.office];
         if (!office) continue;
@@ -459,11 +513,13 @@ export default function Station({
         moduleContainer.eventMode = "static";
         world.addChild(moduleContainer);
 
-        // Per-module outer glow — soft radial behind the room
+        // Per-module outer glow — rendered in shared glowLayer (below all modules)
+        // so module content naturally paints over neighboring glow bleed.
         const glow = new Graphics();
+        glow.eventMode = "none";
+        glow.position.set(moduleCfg.offsetX, moduleCfg.offsetY);
         const glowPad = Math.max(worldW, worldH) * 0.3;
         const glowColor = hexToInt(moduleCfg.accent);
-        // Stack of fading rings for a cheap soft outer glow
         for (let i = 6; i >= 1; i--) {
           const pad = (glowPad / 6) * i;
           const a = 0.03 * (7 - i);
@@ -471,7 +527,15 @@ export default function Station({
             .roundRect(-pad, -pad, worldW + pad * 2, worldH + pad * 2, 16)
             .fill({ color: glowColor, alpha: a });
         }
-        moduleContainer.addChild(glow);
+        glowLayer.addChild(glow);
+        // Track glow so module drag can update its position
+        const glowRef = glow;
+
+        // Opaque backdrop — covers neighboring glow bleed
+        const backdrop = new Graphics();
+        backdrop.eventMode = "none";
+        backdrop.rect(0, 0, worldW, worldH).fill({ color: 0x070412, alpha: 1 });
+        moduleContainer.addChild(backdrop);
 
         // Module sub-layers
         const roomBg = new Container();
@@ -508,6 +572,7 @@ export default function Station({
 
         // Neon trim frame around the module
         const trim = new Graphics();
+        trim.eventMode = "none"; // must not block agent clicks
         trim
           .roundRect(-2, -2, worldW + 4, worldH + 4, 3)
           .stroke({ color: glowColor, width: 2, alpha: 0.8 });
@@ -515,6 +580,39 @@ export default function Station({
           .roundRect(-5, -5, worldW + 10, worldH + 10, 5)
           .stroke({ color: glowColor, width: 1, alpha: 0.35 });
         moduleContainer.addChild(trim);
+
+        // Shift-hover glow — shows when shift is held and hovering this module
+        const shiftGlow = new Graphics();
+        shiftGlow.eventMode = "none";
+        shiftGlow.visible = false;
+        shiftGlow
+          .roundRect(-4, -4, worldW + 8, worldH + 8, 5)
+          .stroke({ color: 0x00ccff, width: 3, alpha: 0.7 });
+        // "shift+drag to move" label
+        const moveLabel = new Text({
+          text: "shift+drag to move",
+          style: new TextStyle({
+            fontFamily: "monospace",
+            fontSize: 11,
+            fill: 0x00ccff,
+          }),
+        });
+        moveLabel.anchor.set(0.5, 0);
+        moveLabel.position.set(worldW / 2, worldH + 8);
+        shiftGlow.addChild(moveLabel);
+        moduleContainer.addChild(shiftGlow);
+
+        // Module hover tracking for shift-glow
+        moduleContainer.on("pointerover", () => {
+          hoveredModuleHandle = moduleHandleForBody as ModuleHandle;
+          updateModuleHoverCursor();
+        });
+        moduleContainer.on("pointerout", () => {
+          if (hoveredModuleHandle === moduleHandleForBody) {
+            hoveredModuleHandle = null;
+            updateModuleHoverCursor();
+          }
+        });
 
         const flat = (gx: number, gy: number) => ({ x: gx * tw, y: gy * th });
         const inRoom = (gx: number, gy: number) =>
@@ -667,15 +765,17 @@ export default function Station({
           const officeSlug = office.slug;
           body.on("pointertap", (ev) => {
             if (ev.button !== 0) return;
+            if (drag) return; // don't click after a drag
             emitAgentClick(officeSlug, deskId, body);
             ev.stopPropagation();
           });
           body.on("pointerdown", (ev) => {
             if (ev.button !== 0) return;
             if (htmlDragActive) return;
+            if ((ev as any).shiftKey || (ev as any).nativeEvent?.shiftKey) return; // let module drag handle it
             ev.stopPropagation();
             const gpos = ev.global;
-            drag = {
+            preDrag = {
               deskId,
               officeSlug,
               body,
@@ -684,9 +784,8 @@ export default function Station({
               origY: body.y,
               startPointerX: gpos.x,
               startPointerY: gpos.y,
-              started: false,
+              startTime: performance.now(),
             };
-            body.cursor = "grabbing";
           });
           body.on("pointerover", (ev) => {
             const rect = app.canvas.getBoundingClientRect();
@@ -991,9 +1090,28 @@ export default function Station({
         // Module background click: focus this module + deselect desk
         moduleContainer.on("pointertap", (ev) => {
           if (ev.button !== 0) return;
+          if (moduleDrag?.started) return; // don't focus after drag
           if (ev.target === moduleContainer || ev.target === roomBg) {
             onModuleFocusRef.current?.(office.slug);
           }
+        });
+
+        // Shift+drag to reposition the entire module
+        moduleContainer.on("pointerdown", (ev) => {
+          if (ev.button !== 0) return;
+          const isShift = (ev as any).shiftKey || (ev as any).nativeEvent?.shiftKey;
+          if (!isShift) return;
+          if (drag || moduleDrag) return;
+          ev.stopPropagation();
+          const gpos = ev.global;
+          moduleDrag = {
+            module: moduleHandleForBody as ModuleHandle,
+            startPointerX: gpos.x,
+            startPointerY: gpos.y,
+            origOffsetX: moduleContainer.x,
+            origOffsetY: moduleContainer.y,
+            started: false,
+          };
         });
 
         const handle: ModuleHandle = {
@@ -1012,16 +1130,26 @@ export default function Station({
           deskOfAgent,
           premadeRoomConfig,
           tilesheet: !!tilesheet,
+          glow: glowRef,
         };
         Object.assign(moduleHandleForBody, handle);
         // Attach ghost to module so it shares local coords
         (handle as ModuleHandle & { ghost: InstanceType<typeof Graphics> }).ghost = ghost;
         (moduleHandleForBody as ModuleHandle & { ghost: InstanceType<typeof Graphics> }).ghost = ghost;
         modules.push(handle);
+        shiftGlows.set(office.slug, shiftGlow);
       }
+
+      // ── Module drag ghost — shows snap-target outline in world space ──
+      const moduleGhost = new Graphics();
+      moduleGhost.visible = false;
+      moduleGhost.eventMode = "none";
+      moduleGhost.zIndex = 99999;
+      world.addChild(moduleGhost);
 
       // ── Beam overlay — drawn above all module furniture, in world space ──
       const beamOverlay = new Graphics();
+      beamOverlay.eventMode = "none"; // must not block agent clicks
       world.addChild(beamOverlay);
 
       // ── Camera: compute target transform ────────────────────────────────
@@ -1030,21 +1158,26 @@ export default function Station({
 
       const computeOverviewTarget = () => {
         // Fit ALL modules into view with padding.
-        let maxX = 0;
-        let maxY = 0;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
         for (const m of modules) {
+          minX = Math.min(minX, m.offsetX);
+          minY = Math.min(minY, m.offsetY);
           maxX = Math.max(maxX, m.offsetX + m.worldW);
           maxY = Math.max(maxY, m.offsetY + m.worldH);
         }
+        if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 100; maxY = 100; }
         const pad = 120;
-        const W = maxX + pad * 2;
-        const H = maxY + pad * 2;
+        const W = (maxX - minX) + pad * 2;
+        const H = (maxY - minY) + pad * 2;
         const scale = Math.min(
           app.renderer.width / W,
           app.renderer.height / H,
         );
-        const centerX = maxX / 2;
-        const centerY = maxY / 2;
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
         cameraTarget.scale = scale;
         cameraTarget.x = app.renderer.width / 2 - centerX * scale;
         cameraTarget.y = app.renderer.height / 2 - centerY * scale;
@@ -1097,9 +1230,9 @@ export default function Station({
         }
       });
 
-      // Camera pan: left-click or middle-click anywhere (agents stop propagation so they won't trigger this)
+      // Camera pan: left-click or middle-click anywhere
       app.stage.on("pointerdown", (ev) => {
-        if (drag) return;
+        if (drag || moduleDrag || preDrag) return;
         if (ev.button !== 0 && ev.button !== 1) return;
         const gpos = ev.global;
         pan = {
@@ -1131,12 +1264,20 @@ export default function Station({
       app.stage.on("pointermove", (ev) => {
         const gpos = ev.global;
 
-        if (drag) {
-          const dx = gpos.x - drag.startPointerX;
-          const dy = gpos.y - drag.startPointerY;
-          if (!drag.started) {
-            if (Math.sqrt(dx * dx + dy * dy) < 4) return;
-            drag.started = true;
+        // Promote preDrag → drag after hold + distance thresholds
+        if (preDrag && !drag) {
+          const dx = gpos.x - preDrag.startPointerX;
+          const dy = gpos.y - preDrag.startPointerY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const held = performance.now() - preDrag.startTime;
+          if (dist >= DRAG_DIST_THRESHOLD && held >= DRAG_HOLD_MS) {
+            // Commit to drag
+            drag = {
+              ...preDrag,
+              started: true,
+            };
+            preDrag = null;
+            drag.body.cursor = "grabbing";
             // Switch to walk animation
             const aidWalk = drag.module.deskOfAgent.get(drag.deskId);
             if (aidWalk) {
@@ -1147,7 +1288,12 @@ export default function Station({
                 sp.body.play();
               }
             }
+          } else {
+            return; // not yet committed
           }
+        }
+
+        if (drag) {
           // Convert to module-local coords
           const localPos = drag.module.container.toLocal(gpos);
           drag.body.position.set(localPos.x, localPos.y);
@@ -1199,6 +1345,33 @@ export default function Station({
           ghost.position.set(snapGX * drag.module.tw, snapGY * drag.module.th);
           ghost.visible = true;
           paintGhost(ghost, drag.module.tw, drag.module.th, valid);
+          return;
+        }
+
+        if (moduleDrag) {
+          const dx = gpos.x - moduleDrag.startPointerX;
+          const dy = gpos.y - moduleDrag.startPointerY;
+          if (!moduleDrag.started) {
+            if (Math.sqrt(dx * dx + dy * dy) < 4) return;
+            moduleDrag.started = true;
+            // Paint ghost outline sized to this module
+            const mw = moduleDrag.module.worldW;
+            const mh = moduleDrag.module.worldH;
+            moduleGhost.clear();
+            moduleGhost
+              .roundRect(0, 0, mw, mh, 4)
+              .fill({ color: 0x00ccff, alpha: 0.1 })
+              .stroke({ color: 0x00ccff, width: 2, alpha: 0.6 });
+            moduleGhost.visible = true;
+          }
+          const SNAP = 48;
+          const rawX = moduleDrag.origOffsetX + dx / cameraCurrent.scale;
+          const rawY = moduleDrag.origOffsetY + dy / cameraCurrent.scale;
+          const snapX = Math.round(rawX / SNAP) * SNAP;
+          const snapY = Math.round(rawY / SNAP) * SNAP;
+          moduleGhost.position.set(snapX, snapY);
+          moduleDrag.module.container.position.set(snapX, snapY);
+          moduleDrag.module.glow.position.set(snapX, snapY);
           return;
         }
 
@@ -1336,7 +1509,37 @@ export default function Station({
         onAgentMoveRef.current?.(d.officeSlug, d.deskId, snapGX, snapGY);
       };
 
+      const endModuleDrag = () => {
+        if (!moduleDrag) return;
+        const d = moduleDrag;
+        moduleDrag = null;
+        moduleGhost.visible = false;
+
+        if (!d.started) {
+          d.module.container.position.set(d.origOffsetX, d.origOffsetY);
+          d.module.glow.position.set(d.origOffsetX, d.origOffsetY);
+          return;
+        }
+
+        const finalX = d.module.container.x;
+        const finalY = d.module.container.y;
+
+        // Update handle's stored offset (used by camera, geomRef, etc.)
+        d.module.offsetX = finalX;
+        d.module.offsetY = finalY;
+        d.module.glow.position.set(finalX, finalY);
+
+        // Persist
+        onModuleMoveRef.current?.(d.module.slug, finalX, finalY);
+      };
+
       app.stage.on("pointerup", (ev) => {
+        if (preDrag) {
+          // Pointer released before drag committed — pointertap on body handles the click
+          preDrag = null;
+          return;
+        }
+        if (moduleDrag) { endModuleDrag(); return; }
         if (drag) {
           endDrag(ev);
           return;
@@ -1344,6 +1547,8 @@ export default function Station({
         if (pan) pan = null;
       });
       app.stage.on("pointerupoutside", () => {
+        preDrag = null;
+        if (moduleDrag) endModuleDrag();
         if (drag) endDrag(null);
         if (pan) pan = null;
       });
@@ -1447,7 +1652,7 @@ export default function Station({
               const isDelegating = (delegationsRef.current.get(deskId) ?? 0) > 0;
               sprites.exclamation.visible = kind === "awaiting_input";
               sprites.check.visible = kind === "done_unacked";
-              sprites.pip.visible = busy && !kind;
+              sprites.pip.visible = (busy && !kind) || kind === "delegating";
               // Tint pip purple when delegating, default highlight otherwise
               if (sprites.pip.visible) {
                 sprites.pip.clear();
@@ -2137,6 +2342,9 @@ export default function Station({
         app.canvas.removeEventListener("wheel", onWheel);
         document.removeEventListener("dragstart", onHtmlDragStart);
         document.removeEventListener("dragend", onHtmlDragEnd);
+        document.removeEventListener("keydown", onKeyDown);
+        document.removeEventListener("keyup", onKeyUp);
+        window.removeEventListener("blur", onWindowBlur);
         for (const m of modules) {
           for (const { body } of m.agentSprites.values()) body.stop();
         }

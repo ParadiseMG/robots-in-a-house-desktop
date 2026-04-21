@@ -10,9 +10,10 @@ import {
 } from "react";
 import type { AgentConfig } from "@/lib/office-types";
 
+export type PromptBarAgent = AgentConfig & { officeSlug: string };
+
 type Props = {
-  agents: AgentConfig[];
-  officeSlug: string;
+  agents: PromptBarAgent[];
   onSent: (result: {
     deskId: string;
     runId: string | null;
@@ -27,7 +28,7 @@ type MentionState = {
   highlight: number;
 };
 
-export default function PromptBar({ agents, officeSlug, onSent }: Props) {
+export default function PromptBar({ agents, onSent }: Props) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +168,7 @@ export default function PromptBar({ agents, officeSlug, onSent }: Props) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          officeSlug,
+          officeSlug: parsed.agent.officeSlug,
           agentId: parsed.agent.id,
           prompt: parsed.prompt,
         }),
@@ -213,9 +214,10 @@ export default function PromptBar({ agents, officeSlug, onSent }: Props) {
                   : "text-white/80 hover:bg-white/5"
               }`}
             >
-              <span>
+              <span className="min-w-0 truncate">
                 <span className="font-medium">@{a.name}</span>
-                <span className="ml-2 text-xs text-white/50">{a.role}</span>
+                <span className="ml-1.5 text-[10px] text-white/30">{a.officeSlug}</span>
+                <span className="ml-1.5 text-xs text-white/50">{a.role}</span>
               </span>
               {a.isReal ? (
                 <span className="rounded bg-emerald-400/20 px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider text-emerald-300">

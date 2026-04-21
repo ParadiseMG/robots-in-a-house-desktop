@@ -20,12 +20,16 @@ import {
   getAgent,
   getResumeSessionId,
   dequeuePrompt,
+  enqueuePrompt,
   agentIsBusy,
   getDelegationStatus,
   listDelegationsBy,
   upsertRateLimit,
   requestToolApproval,
   getToolApprovalByCallId,
+  listTodos,
+  createTodo,
+  updateTodo,
   type AgentRunRow,
 } from "./db.js";
 import { reportError } from "./error-reporter.js";
@@ -111,12 +115,90 @@ function addRunTokens(
     );
 }
 
+/**
+ * When a delegated run reaches a terminal state (done/error), ping the
+ * delegator so they learn the result without having to poll check_delegation.
+ *
+ * If the delegator's run is still active (they used `await: true` and the poll
+ * loop will surface it), this is a no-op — we only enqueue when the delegator
+ * is idle so they get a fresh run with the callback.
+ */
+function notifyDelegatorIfIdle(
+  runId: string,
+  agentId: string,
+  officeSlug: string,
+  outcome: "done" | "error",
+  summary: string | null,
+) {
+  const row = db()
+    .prepare(
+      "SELECT delegated_by_agent_id, delegated_by_run_id FROM agent_runs WHERE id = ?",
+    )
+    .get(runId) as {
+    delegated_by_agent_id: string | null;
+    delegated_by_run_id: string | null;
+  } | undefined;
+  if (!row?.delegated_by_agent_id) return; // not a delegated run
+
+  const delegatorId = row.delegated_by_agent_id;
+
+  // If the delegator is still running (await: true path), the poll loop will
+  // pick up the result — don't double-notify.
+  if (agentIsBusy(officeSlug, delegatorId)) return;
+
+  const statusLine = outcome === "done"
+    ? `${agentId} finished the task you delegated (run ${runId.slice(0, 8)}).`
+    : `${agentId} errored on the task you delegated (run ${runId.slice(0, 8)}).`;
+  const body = summary
+    ? `${statusLine}\n\nTheir reply:\n${summary}`
+    : statusLine;
+
+  enqueuePrompt(delegatorId, officeSlug, `Delegation callback: ${agentId}`, body);
+  console.log(
+    `[runner] enqueued delegation callback to ${delegatorId} from ${agentId} (${outcome})`,
+  );
+
+  // We already know the delegator is idle (early return above), so drain
+  // the queue immediately — otherwise the callback sits until someone else
+  // triggers a drain for this agent.
+  const next = dequeuePrompt(delegatorId, officeSlug);
+  if (next) {
+    const d = db();
+    const ag = getAgent(officeSlug, delegatorId);
+    if (!ag) return;
+    const taskId = newId();
+    const assignmentId = newId();
+    const callbackRunId = newId();
+    const now = Date.now();
+    d.transaction(() => {
+      d.prepare(
+        "INSERT INTO tasks (id, office_slug, title, body, status, created_at) VALUES (?, ?, ?, ?, 'assigned', ?)",
+      ).run(taskId, officeSlug, next.title, next.prompt, now);
+      d.prepare(
+        "INSERT INTO assignments (id, task_id, agent_id, desk_id, office_slug, assigned_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(assignmentId, taskId, delegatorId, ag.deskId, officeSlug, now);
+      d.prepare(
+        "INSERT INTO agent_runs (id, assignment_id, agent_id, office_slug, status, started_at) VALUES (?, ?, ?, ?, 'starting', ?)",
+      ).run(callbackRunId, assignmentId, delegatorId, officeSlug, now);
+    })();
+    insertEvent(callbackRunId, "status", { status: "starting" });
+    void runAgent({
+      runId: callbackRunId,
+      agentId: delegatorId,
+      officeSlug,
+      prompt: next.prompt,
+    });
+  }
+}
+
 // In-process registry of pending request_input waiters, keyed by runId.
 // Single-process runner, so in-memory is fine.
 const waiters = new Map<string, (reply: string) => void>();
 
 // Registry of pending tool approval waiters, keyed by approvalId.
-export const toolApprovalWaiters = new Map<string, (result: { approved: boolean; reason?: string }) => void>();
+// Imported from standalone module to avoid pulling agent-runner into API routes.
+import { toolApprovalWaiters } from "./tool-approval-waiters.js";
+export { toolApprovalWaiters };
 
 function makeInputServer(runId: string) {
   return createSdkMcpServer({
@@ -648,6 +730,376 @@ function makeBrandServer(runId: string, officeSlug: string) {
   });
 }
 
+// ---- Office slugs with real agents (for roster scanning) ----
+const OFFICE_SLUGS = ["paradise", "dontcall", "operations"];
+
+/**
+ * Load the full agent roster across all offices. Returns structured data
+ * so Switch (or any tool) can see who's available without reading JSON files.
+ */
+function loadFullRoster(): Array<{
+  id: string;
+  name: string;
+  role: string;
+  officeSlug: string;
+  isReal: boolean;
+  isBusy: boolean;
+}> {
+  const roster: Array<{
+    id: string;
+    name: string;
+    role: string;
+    officeSlug: string;
+    isReal: boolean;
+    isBusy: boolean;
+  }> = [];
+  for (const slug of OFFICE_SLUGS) {
+    try {
+      const raw = readFileSync(join(ROOT, `config/${slug}.office.json`), "utf8");
+      const config = JSON.parse(raw) as { agents?: Array<{ id: string; name: string; role: string; isReal?: boolean }> };
+      for (const a of config.agents ?? []) {
+        roster.push({
+          id: a.id,
+          name: a.name,
+          role: a.role,
+          officeSlug: slug,
+          isReal: a.isReal ?? false,
+          isBusy: agentIsBusy(slug, a.id),
+        });
+      }
+    } catch { /* skip unreadable configs */ }
+  }
+  return roster;
+}
+
+/**
+ * Create a groupchat in-process (used by Switch's create_groupchat tool).
+ * Replicates POST /api/groupchats logic but runs inside the runner process
+ * so Switch can create groupchats without HTTP round-trips.
+ */
+function createGroupchatInProcess(params: {
+  agents: Array<{ id: string; officeSlug: string }>;
+  prompt: string;
+  convenedBy: string;
+  targetRounds?: number;
+  persistent?: boolean;
+  pinnedName?: string;
+}): { groupchatId: string; members: Array<{ agentId: string; officeSlug: string; started: boolean }> } | { error: string } {
+  const { agents, prompt, convenedBy, targetRounds, persistent, pinnedName } = params;
+  if (!agents.length || !prompt.trim()) {
+    return { error: "missing agents or prompt" };
+  }
+
+  const rounds = Math.max(1, Math.min(6, Math.floor(targetRounds ?? 1)));
+
+  // Validate all agents exist
+  const resolved = agents.map((a) => {
+    const agent = getAgent(a.officeSlug, a.id);
+    if (!agent) return null;
+    return { ...agent, officeSlug: a.officeSlug };
+  });
+  if (resolved.some((a) => !a)) {
+    return { error: "one or more agents not found in their office configs" };
+  }
+
+  const d = db();
+  const groupchatId = `gc_${crypto.randomUUID()}`;
+  const taskId = `gctask_${crypto.randomUUID()}`;
+  const now = Date.now();
+  const promptTrimmed = prompt.trim();
+  const title = `Groupchat: ${promptTrimmed.split("\n")[0].slice(0, 60)}`;
+  const officeSet = new Set(agents.map((a) => a.officeSlug));
+  const taskOffice = officeSet.size === 1 ? agents[0].officeSlug : "cross-office";
+
+  const memberEntries: Array<{
+    agentId: string;
+    officeSlug: string;
+    assignmentId: string;
+    deskId: string;
+    isReal: boolean;
+  }> = [];
+
+  d.transaction(() => {
+    d.prepare(
+      "INSERT INTO tasks (id, office_slug, title, body, status, created_at) VALUES (?, ?, ?, ?, 'assigned', ?)",
+    ).run(taskId, taskOffice, title, promptTrimmed, now);
+
+    for (const a of resolved as NonNullable<(typeof resolved)[0]>[]) {
+      const assignmentId = `gcassign_${crypto.randomUUID()}`;
+      d.prepare(
+        "INSERT INTO assignments (id, task_id, agent_id, desk_id, office_slug, assigned_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(assignmentId, taskId, a.id, a.deskId, a.officeSlug, now);
+      memberEntries.push({
+        agentId: a.id,
+        officeSlug: a.officeSlug,
+        assignmentId,
+        deskId: a.deskId,
+        isReal: a.isReal,
+      });
+    }
+
+    d.prepare(
+      "INSERT INTO groupchats (id, task_id, convened_by, prompt, convened_at, target_rounds, persistent, pinned_name, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')",
+    ).run(groupchatId, taskId, convenedBy, promptTrimmed, now, rounds, persistent ? 1 : 0, pinnedName ?? null);
+
+    const insMember = d.prepare(
+      "INSERT INTO groupchat_members (groupchat_id, agent_id, office_slug, assignment_id) VALUES (?, ?, ?, ?)",
+    );
+    for (const mem of memberEntries) {
+      insMember.run(groupchatId, mem.agentId, mem.officeSlug, mem.assignmentId);
+    }
+  })();
+
+  // Dispatch runs for real agents
+  const results: Array<{ agentId: string; officeSlug: string; started: boolean }> = [];
+  for (const mem of memberEntries) {
+    if (!mem.isReal) {
+      results.push({ agentId: mem.agentId, officeSlug: mem.officeSlug, started: false });
+      continue;
+    }
+    if (agentIsBusy(mem.officeSlug, mem.agentId)) {
+      enqueuePrompt(mem.agentId, mem.officeSlug, title, promptTrimmed);
+      results.push({ agentId: mem.agentId, officeSlug: mem.officeSlug, started: false });
+      continue;
+    }
+    const runId = newId();
+    d.prepare(
+      "INSERT INTO agent_runs (id, assignment_id, agent_id, office_slug, status, started_at) VALUES (?, ?, ?, ?, 'starting', ?)",
+    ).run(runId, mem.assignmentId, mem.agentId, mem.officeSlug, Date.now());
+    insertEvent(runId, "status", { status: "starting" });
+    void runAgent({
+      runId,
+      agentId: mem.agentId,
+      officeSlug: mem.officeSlug,
+      prompt: promptTrimmed,
+    });
+    results.push({ agentId: mem.agentId, officeSlug: mem.officeSlug, started: true });
+  }
+
+  console.log(`[runner] groupchat ${groupchatId} created by ${convenedBy} with ${results.length} members`);
+  return { groupchatId, members: results };
+}
+
+/**
+ * Switch-only MCP server: create_groupchat + list_roster tools.
+ * These let Switch evaluate agent availability and spin up groupchats.
+ */
+function makeSwitchServer() {
+  return createSdkMcpServer({
+    name: "robots-switch",
+    tools: [
+      tool(
+        "create_groupchat",
+        "Create a groupchat with the specified agents and kick off round 1. Only call this after evaluating which agents should participate. Returns the groupchat ID.",
+        {
+          agents: z
+            .array(
+              z.object({
+                id: z.string().describe("Agent ID (e.g. 'patcher', 'beacon')"),
+                officeSlug: z.string().describe("Office slug (e.g. 'operations', 'paradise', 'dontcall')"),
+              }),
+            )
+            .min(1)
+            .describe("Agents to include in the groupchat"),
+          prompt: z.string().min(1).describe("The groupchat prompt — what agents should discuss/solve"),
+          persistent: z.boolean().optional().describe("Pin this groupchat so it persists across rounds (default: false)"),
+          pinnedName: z.string().optional().describe("Display name for a persistent groupchat (e.g. 'Bug Squad')"),
+          targetRounds: z.number().optional().describe("Discussion rounds (default: 1, max: 6)"),
+          convenedBy: z.string().optional().describe("Who requested this (agent ID or 'connor'). Default: 'switch'"),
+        },
+        async (args) => {
+          const result = createGroupchatInProcess({
+            agents: args.agents,
+            prompt: args.prompt,
+            convenedBy: args.convenedBy ?? "switch",
+            targetRounds: args.targetRounds,
+            persistent: args.persistent,
+            pinnedName: args.pinnedName,
+          });
+          if ("error" in result) {
+            return {
+              content: [{ type: "text", text: `create_groupchat failed: ${result.error}` }],
+              isError: true,
+            };
+          }
+          const memberList = result.members
+            .map((m) => `${m.agentId} (${m.officeSlug})${m.started ? "" : " [queued]"}`)
+            .join(", ");
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Groupchat created: ${result.groupchatId}\nMembers: ${memberList}\nAll agents have been notified and are working on it.`,
+              },
+            ],
+          };
+        },
+      ),
+      tool(
+        "list_roster",
+        "Get the full agent roster across all offices. Shows IDs, names, roles, offices, and whether each agent is currently busy. Use this to decide who to include in a groupchat.",
+        {},
+        async () => {
+          const roster = loadFullRoster();
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify(roster, null, 2) }],
+          };
+        },
+      ),
+    ],
+  });
+}
+
+/**
+ * Groupchat request MCP server: lets any agent ask Switch to assemble a
+ * groupchat. Dispatches a run to Switch, waits for Switch to finish, and
+ * returns the result.
+ */
+function makeGroupchatRequestServer(
+  callerAgentId: string,
+  callerOfficeSlug: string,
+  callerRunId: string,
+) {
+  return createSdkMcpServer({
+    name: "robots-groupchat",
+    tools: [
+      tool(
+        "request_groupchat",
+        "Ask Switch (the switchboard operator) to assemble a groupchat for you. Describe what you need help with and Switch will pick the right agents from across all offices, create the groupchat, and kick it off. Returns confirmation once the groupchat is created.",
+        {
+          topic: z
+            .string()
+            .min(1)
+            .describe("What you need help with — be specific about the problem or goal"),
+          context: z
+            .string()
+            .optional()
+            .describe("Additional context: what you've tried, relevant files, error messages"),
+          suggestedAgents: z
+            .array(z.string())
+            .optional()
+            .describe("Optional: agent IDs you think should be included. Switch may adjust."),
+          urgent: z
+            .boolean()
+            .optional()
+            .describe("If true, Switch will prioritize busy agents if needed"),
+        },
+        async (args) => {
+          const switchAgent = getAgent("operations", "switch");
+          if (!switchAgent) {
+            return {
+              content: [{ type: "text", text: "Switch agent not found in operations office." }],
+              isError: true,
+            };
+          }
+
+          // Build the prompt for Switch
+          const switchPrompt = `An agent is requesting a groupchat. Evaluate and create it.
+
+Requester: ${callerAgentId} (${callerOfficeSlug} office)
+Topic: ${args.topic}${args.context ? `\nContext: ${args.context}` : ""}${args.suggestedAgents?.length ? `\nSuggested agents: ${args.suggestedAgents.join(", ")}` : ""}${args.urgent ? "\nURGENT: Prioritize even if preferred agents are busy." : ""}
+
+Instructions:
+1. Call list_roster to see all available agents and who's busy
+2. Pick 2-4 agents who are best suited for this topic
+3. Include the requester (${callerAgentId}, ${callerOfficeSlug}) if they should participate in the discussion
+4. Do NOT include yourself (switch) — you're the operator, not a participant
+5. Prefer agents who aren't busy unless the topic is urgent or they're clearly the best fit
+6. Call create_groupchat with the chosen agents and a clear prompt that explains what to discuss/solve
+7. Set convenedBy to "${callerAgentId}"`;
+
+          if (agentIsBusy("operations", "switch")) {
+            enqueuePrompt("switch", "operations", `Groupchat request from ${callerAgentId}`, switchPrompt);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Switch is currently busy. Your groupchat request has been queued — Switch will process it when free. You'll see the groupchat appear in the UI once it's created.`,
+                },
+              ],
+            };
+          }
+
+          // Create task + assignment + run for Switch
+          const d = db();
+          const taskId = newId();
+          const assignmentId = newId();
+          const switchRunId = newId();
+          const now = Date.now();
+
+          d.transaction(() => {
+            d.prepare(
+              "INSERT INTO tasks (id, office_slug, title, body, status, created_at) VALUES (?, ?, ?, ?, 'assigned', ?)",
+            ).run(taskId, "operations", `Groupchat request from ${callerAgentId}`, switchPrompt, now);
+            d.prepare(
+              "INSERT INTO assignments (id, task_id, agent_id, desk_id, office_slug, assigned_at) VALUES (?, ?, ?, ?, ?, ?)",
+            ).run(assignmentId, taskId, "switch", switchAgent.deskId, "operations", now);
+            d.prepare(
+              `INSERT INTO agent_runs
+               (id, assignment_id, agent_id, office_slug, status, started_at,
+                delegated_by_agent_id, delegated_by_run_id)
+               VALUES (?, ?, ?, ?, 'starting', ?, ?, ?)`,
+            ).run(switchRunId, assignmentId, "switch", "operations", now, callerAgentId, callerRunId);
+          })();
+
+          insertEvent(switchRunId, "status", { status: "starting" });
+          void runAgent({
+            runId: switchRunId,
+            agentId: "switch",
+            officeSlug: "operations",
+            prompt: switchPrompt,
+          });
+
+          // Poll for Switch to finish (should be quick — 15-60s for roster read + create)
+          const MAX_WAIT_MS = 3 * 60 * 1000; // 3 min cap
+          const POLL_MS = 2000;
+          const start = Date.now();
+          while (Date.now() - start < MAX_WAIT_MS) {
+            await new Promise((r) => setTimeout(r, POLL_MS));
+            const row = d
+              .prepare("SELECT status, error FROM agent_runs WHERE id = ?")
+              .get(switchRunId) as { status: string; error: string | null } | undefined;
+            if (!row) break;
+            if (row.status === "done") {
+              // Get Switch's final assistant message
+              const lastEvent = d
+                .prepare(
+                  "SELECT payload FROM run_events WHERE run_id = ? AND kind = 'assistant' ORDER BY ts DESC LIMIT 1",
+                )
+                .get(switchRunId) as { payload: string } | undefined;
+              const text = lastEvent
+                ? (JSON.parse(lastEvent.payload) as { text?: string }).text ?? "Groupchat created."
+                : "Groupchat created.";
+              return { content: [{ type: "text", text }] };
+            }
+            if (row.status === "error") {
+              return {
+                content: [{ type: "text", text: `Switch errored: ${row.error ?? "unknown"}` }],
+                isError: true,
+              };
+            }
+            if (row.status === "interrupted") {
+              return {
+                content: [{ type: "text", text: "Switch was interrupted by a runner restart. Try again." }],
+                isError: true,
+              };
+            }
+          }
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Switch is still working on your request (run ${switchRunId.slice(0, 8)}). The groupchat will appear in the UI once it's created.`,
+              },
+            ],
+          };
+        },
+      ),
+    ],
+  });
+}
+
 function makeChangelogServer(agentId: string, officeSlug: string) {
   return createSdkMcpServer({
     name: "robots-changelog",
@@ -713,6 +1165,58 @@ function makeChangelogServer(agentId: string, officeSlug: string) {
   });
 }
 
+function makeTodosServer(officeSlug: string) {
+  return createSdkMcpServer({
+    name: "robots-todos",
+    tools: [
+      tool(
+        "manage_todos",
+        "Manage your office's to-do list. Connor sees this list in the UI when viewing your office. Use it to track work items, blockers, or things Connor should know about.",
+        {
+          action: z.enum(["list", "add", "done", "undone"]).describe(
+            "list = view all todos, add = create a new item, done = mark complete, undone = reopen",
+          ),
+          text: z.string().optional().describe("Text for a new todo (required for 'add')"),
+          todoId: z.string().optional().describe("Todo ID (required for 'done'/'undone')"),
+        },
+        async (args) => {
+          if (args.action === "list") {
+            const todos = listTodos(officeSlug);
+            if (todos.length === 0) {
+              return { content: [{ type: "text" as const, text: "No todos for this office." }] };
+            }
+            const lines = todos.map((t) =>
+              `${t.done ? "[x]" : "[ ]"} ${t.text}  (id: ${t.id})`,
+            );
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          }
+
+          if (args.action === "add") {
+            if (!args.text?.trim()) {
+              return { content: [{ type: "text" as const, text: "text is required for add." }], isError: true };
+            }
+            const todo = createTodo(officeSlug, args.text.trim());
+            return { content: [{ type: "text" as const, text: `Added: "${todo.text}" (id: ${todo.id})` }] };
+          }
+
+          if (args.action === "done" || args.action === "undone") {
+            if (!args.todoId) {
+              return { content: [{ type: "text" as const, text: "todoId is required." }], isError: true };
+            }
+            const ok = updateTodo(args.todoId, { done: args.action === "done" });
+            if (!ok) {
+              return { content: [{ type: "text" as const, text: `Todo ${args.todoId} not found.` }], isError: true };
+            }
+            return { content: [{ type: "text" as const, text: `Marked ${args.action}.` }] };
+          }
+
+          return { content: [{ type: "text" as const, text: "Unknown action." }], isError: true };
+        },
+      ),
+    ],
+  });
+}
+
 async function runAgent(params: {
   runId: string;
   agentId: string;
@@ -756,6 +1260,8 @@ async function runAgent(params: {
     "mcp__robots-changelog__log_change",
     "mcp__robots-changelog__query_changelog",
   );
+  mcpServers["robots-todos"] = makeTodosServer(officeSlug);
+  extraAllowed.push("mcp__robots-todos__manage_todos");
   if (agent.isHead) {
     mcpServers["robots-brand"] = makeBrandServer(runId, officeSlug);
     extraAllowed.push("mcp__robots-brand__create_agent");
@@ -771,6 +1277,25 @@ async function runAgent(params: {
     "mcp__robots-delegate__delegate_task",
     "mcp__robots-delegate__check_delegation",
   );
+
+  // Groupchat request tool — any agent can ask Switch to assemble a groupchat
+  if (agentId !== "switch") {
+    mcpServers["robots-groupchat"] = makeGroupchatRequestServer(
+      agentId,
+      officeSlug,
+      runId,
+    );
+    extraAllowed.push("mcp__robots-groupchat__request_groupchat");
+  }
+
+  // Switch-only tools: create_groupchat + list_roster
+  if (agentId === "switch") {
+    mcpServers["robots-switch"] = makeSwitchServer();
+    extraAllowed.push(
+      "mcp__robots-switch__create_groupchat",
+      "mcp__robots-switch__list_roster",
+    );
+  }
 
   // --- Memory injection: read MEMORY.md and prepend to prompt on fresh runs ---
   let effectivePrompt = prompt;
@@ -863,6 +1388,13 @@ async function runAgent(params: {
           session_id: msg.session_id,
           ...(isDelegatedRun?.delegated_by_agent_id ? { acknowledged_at: now } : {}),
         });
+
+        // Ping the delegator if they're idle so they learn the result
+        // without having to manually call check_delegation.
+        if (isDelegatedRun?.delegated_by_agent_id) {
+          const resultText = msg.subtype === "success" ? (msg.result ?? null) : null;
+          notifyDelegatorIfIdle(runId, agentId, officeSlug, "done", resultText);
+        }
       } else if (msg.type === "rate_limit_event") {
         const info = msg.rate_limit_info;
         const key = info.rateLimitType ?? "five_hour";
@@ -893,6 +1425,9 @@ async function runAgent(params: {
       officeSlug,
       runId,
     });
+
+    // Notify delegator about the error
+    notifyDelegatorIfIdle(runId, agentId, officeSlug, "error", message);
   } finally {
     // If the run ended while still blocked on a waiter, unblock with an empty string
     // so the MCP tool promise resolves (SDK shutdown path).

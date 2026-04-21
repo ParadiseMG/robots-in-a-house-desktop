@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useVisibleInterval } from "@/hooks/useVisibleInterval";
 import MessageList, { type ChatMessage, type PendingMessage } from "@/components/dock/MessageList";
 import ToolCallLine from "@/components/dock/ToolCallLine";
 import AwaitingInputForm from "@/components/dock/AwaitingInputForm";
@@ -99,30 +100,21 @@ export default function ChatTab({
     return () => { alive = false; };
   }, [officeSlug, agentId, refetchNonce]);
 
-  // Fetch pending messages
-  useEffect(() => {
-    const fetchPendingMessages = async () => {
-      try {
-        const qs = new URLSearchParams({ office: officeSlug, agentId });
-        const res = await fetch(`/api/queue?${qs}`, { cache: "no-store" });
-        if (!res.ok) return;
-        const json = (await res.json()) as { queuedPrompts: Array<{ id: string; prompt: string; queued_at: number }> };
+  // Fetch pending messages — pauses when tab hidden
+  useVisibleInterval(() => {
+    const qs = new URLSearchParams({ office: officeSlug, agentId });
+    fetch(`/api/queue?${qs}`, { cache: "no-store" })
+      .then((r) => r.ok ? r.json() as Promise<{ queuedPrompts: Array<{ id: string; prompt: string; queued_at: number }> }> : null)
+      .then((json) => {
+        if (!json) return;
         setPendingMessages(json.queuedPrompts.map(q => ({
           id: q.id,
           text: q.prompt,
           queuedAt: q.queued_at,
         })));
-      } catch {
-        // ignore
-      }
-    };
-
-    fetchPendingMessages();
-
-    // Poll for updates every 3 seconds
-    const interval = setInterval(fetchPendingMessages, 3000);
-    return () => clearInterval(interval);
-  }, [officeSlug, agentId, refetchNonce]);
+      })
+      .catch(() => {});
+  }, 3000, [officeSlug, agentId, refetchNonce]);
 
   // No auto-ack here — the green checkmark on the sprite should persist
   // until Connor explicitly clicks it (handled by handleAgentClick in page.tsx)

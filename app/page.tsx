@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import stationRaw from "@/config/station.json";
 import type {
   OfficeConfig,
   StationConfig,
@@ -9,6 +8,7 @@ import type {
 } from "@/lib/office-types";
 import Station from "@/components/pixi/Station";
 import type { Task } from "@/components/tray/TaskTray";
+import { useVisibleInterval } from "@/hooks/useVisibleInterval";
 import PromptBar from "@/components/prompt-bar/PromptBar";
 import CommandPalette from "@/components/palette/CommandPalette";
 import UsageTracker from "@/components/usage/UsageTracker";
@@ -17,9 +17,8 @@ import ChatDock, { DockTabsProvider } from "@/components/dock/ChatDock";
 import HeadsView from "@/components/views/HeadsView";
 import { useDockTabs } from "@/hooks/useDockTabs";
 import AgentHoverCard from "@/components/canvas/AgentHoverCard";
-import ActiveWarRooms from "@/components/events/ActiveWarRooms";
-import NotificationCenter from "@/components/notifications/NotificationCenter";
-import ErrorLog from "@/components/errors/ErrorLog";
+import ActiveGroupchats from "@/components/events/ActiveGroupchats";
+import OfficeTodos from "@/components/todos/OfficeTodos";
 import Tooltip from "@/components/ui/Tooltip";
 import HealthBanner from "@/components/health/HealthBanner";
 import WelcomePrompt from "@/components/health/WelcomePrompt";
@@ -27,19 +26,29 @@ import SettingsPanel from "@/components/settings/SettingsPanel";
 import { useAmbientStream } from "@/hooks/useAmbientStream";
 import confetti from "canvas-confetti";
 
-const stationBase = stationRaw as StationConfig;
+const DEFAULT_STATION: StationConfig = {
+  slug: "my-station",
+  name: "My Station",
+  modules: [],
+  background: { kind: "starfield", seed: 1, density: 0.0008 },
+};
 
-/** Build a station config that includes all loaded offices. */
-function buildStation(slugs: string[], offices: Record<string, OfficeConfig>): StationConfig {
-  // Start with modules from the static station.json for known offices
+/** Build a station config dynamically from loaded offices + optional station.json overrides. */
+function buildStation(
+  slugs: string[],
+  offices: Record<string, OfficeConfig>,
+  stationOverride?: StationConfig | null,
+): StationConfig {
+  const base = stationOverride ?? DEFAULT_STATION;
+
+  // Start with modules from station.json that still exist on disk
   const existingModules = new Map(
-    stationBase.modules.map((m) => [m.office, m]),
+    base.modules.map((m) => [m.office, m]),
   );
-
-  // Add any new offices that aren't in station.json
-  const modules = [...stationBase.modules.filter((m) => slugs.includes(m.office))];
+  const modules = [...base.modules.filter((m) => slugs.includes(m.office))];
   let nextX = modules.reduce((max, m) => Math.max(max, m.offsetX + 800), 0);
 
+  // Add any offices that aren't in the base config
   for (const slug of slugs) {
     if (existingModules.has(slug)) continue;
     modules.push({
@@ -51,7 +60,7 @@ function buildStation(slugs: string[], offices: Record<string, OfficeConfig>): S
     nextX += 800;
   }
 
-  return { ...stationBase, modules };
+  return { ...base, modules };
 }
 
 const ROSTER_POLL_MS = 5_000;
@@ -100,21 +109,21 @@ export default function Home() {
 }
 
 function HomeInner() {
-  const { openOrFocus, openWarRoom, focusedTab, tabs, reorder } = useDockTabs();
+  const { openOrFocus, openGroupchat, focusedTab, tabs, reorder } = useDockTabs();
 
   // Dynamic office loading
   const [offices, setOffices] = useState<Record<string, OfficeConfig>>({});
   const [order, setOrder] = useState<string[]>([]);
   const [officesLoaded, setOfficesLoaded] = useState(false);
-  const [station, setStation] = useState<StationConfig>(stationBase);
+  const [station, setStation] = useState<StationConfig>(DEFAULT_STATION);
 
   useEffect(() => {
     fetch("/api/offices")
       .then((r) => r.json())
-      .then((data: { offices: Record<string, OfficeConfig>; slugs: string[] }) => {
+      .then((data: { offices: Record<string, OfficeConfig>; slugs: string[]; station?: StationConfig | null }) => {
         setOffices(data.offices);
         setOrder(data.slugs);
-        setStation(buildStation(data.slugs, data.offices));
+        setStation(buildStation(data.slugs, data.offices, data.station));
         setOfficesLoaded(true);
         // Redirect to setup if no offices exist
         if (data.slugs.length === 0) {
@@ -351,11 +360,7 @@ function HomeInner() {
     }
   }, [order]);
 
-  useEffect(() => {
-    void refetchRoster();
-    const id = setInterval(refetchRoster, ROSTER_POLL_MS);
-    return () => clearInterval(id);
-  }, [refetchRoster]);
+  useVisibleInterval(() => { void refetchRoster(); }, ROSTER_POLL_MS, [refetchRoster]);
 
   const busyDeskIds = useMemo(() => {
     const s = new Set<string>();
@@ -500,7 +505,7 @@ function HomeInner() {
       }
     }
     return m;
-  }, []);
+  }, [offices, order]);
 
   const runByDesk = useMemo(() => {
     const m = new Map<string, string | null>();
@@ -726,21 +731,6 @@ function HomeInner() {
     [bubble, agentByDesk, selectDesk, refetchRoster],
   );
 
-  const handleToolApproval = useCallback(
-    async (approvalId: string, action: "approve" | "deny", reason?: string) => {
-      try {
-        await fetch(`/api/tool-approvals/${encodeURIComponent(approvalId)}/resolve`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, reason }),
-        });
-      } catch (error) {
-        console.error("Failed to resolve tool approval:", error);
-      }
-    },
-    [],
-  );
-
   const handleAgentMove = useCallback(
     async (
       officeSlug: string,
@@ -767,23 +757,48 @@ function HomeInner() {
     [],
   );
 
+  const handleModuleMove = useCallback(
+    async (officeSlug: string, offsetX: number, offsetY: number) => {
+      try {
+        const res = await fetch("/api/modules/move", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ officeSlug, offsetX, offsetY }),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          console.error("module move failed:", err.error ?? res.status);
+        }
+      } catch (e) {
+        console.error("module move network error:", e);
+      }
+    },
+    [],
+  );
+
   const officeContainerRef = useRef<HTMLDivElement | null>(null);
   const sidebarOffice = offices[sidebarSlug] ?? offices[order[0]];
 
-  const allAgentsForDock = useMemo(() => {
+  const allAgentsWithSlug = useMemo(() => {
     return order.flatMap((slug) =>
-      (offices[slug]?.agents ?? []).map((a) => ({
-        id: a.id,
-        name: a.name,
-        role: a.role,
-        deskId: a.deskId,
-        isReal: a.isReal,
-        officeSlug: slug,
-      })),
+      (offices[slug]?.agents ?? []).map((a) => ({ ...a, officeSlug: slug })),
     );
   }, [offices, order]);
 
-  // Lookup maps for ActiveWarRooms
+  const allAgentsForDock = useMemo(() => {
+    return allAgentsWithSlug.map((a) => ({
+      id: a.id,
+      name: a.name,
+      role: a.role,
+      deskId: a.deskId,
+      isReal: a.isReal,
+      officeSlug: a.officeSlug,
+    }));
+  }, [allAgentsWithSlug]);
+
+  // Lookup maps for ActiveGroupchats + NotificationCenter
   const agentNameMap = useMemo(() => {
     const m = new Map<string, string>();
     for (const slug of order) {
@@ -947,51 +962,15 @@ function HomeInner() {
               </a>
               </Tooltip>
             </div>
-            {/* Notifications — top-left, below toolbar (canvas view only) */}
-            {viewMode === "canvas" && <div className="pointer-events-auto absolute left-3 top-14 z-20 w-64 flex flex-col gap-2">
-              <NotificationCenter
-                officeNames={officeNameMap}
-                officeAccents={officeAccentMap}
-                onOpenWarRoom={(slug, meetingId) => {
-                  const office = offices[slug];
-                  openWarRoom(
-                    slug,
-                    office ? `${office.name} War Room` : "War Room",
-                    meetingId,
-                  );
-                }}
-                onOpenAgent={(slug, agentId) => {
-                  const agentConfig = offices[slug]?.agents.find((a) => a.id === agentId);
-                  if (!agentConfig) return;
-                  openOrFocus({
-                    id: agentId,
-                    agentId,
-                    deskId: agentConfig.deskId,
-                    officeSlug: slug,
-                    kind: "1:1",
-                    label: agentConfig.name,
-                  });
-                }}
-                onToolApproval={handleToolApproval}
-              />
-              <ErrorLog
-                officeNames={officeNameMap}
-                activeOfficeSlug={sidebarSlug}
-                activeAgentId={focusedTab?.agentId ?? null}
-                onOpenAgent={(slug, agentId) => {
-                  const agentConfig = offices[slug]?.agents.find((a) => a.id === agentId);
-                  if (!agentConfig) return;
-                  openOrFocus({
-                    id: agentId,
-                    agentId,
-                    deskId: agentConfig.deskId,
-                    officeSlug: slug,
-                    kind: "1:1",
-                    label: agentConfig.name,
-                  });
-                }}
-              />
-            </div>}
+            {/* To-do list — top-left, below toolbar (canvas view only) */}
+            {viewMode === "canvas" && focusedModule && (
+              <div className="pointer-events-auto absolute left-3 top-14 z-20 w-64">
+                <OfficeTodos
+                  officeSlug={focusedModule}
+                  accent={offices[focusedModule]?.theme?.accent}
+                />
+              </div>
+            )}
             {viewMode === "grid" ? (
               <HeadsView
                 heads={headAgents}
@@ -1029,13 +1008,8 @@ function HomeInner() {
               onAgentClick={handleAgentClick}
               onDeskDrop={handleDeskDrop}
               onAgentMove={handleAgentMove}
+              onModuleMove={handleModuleMove}
               onModuleFocus={(slug) => focusModule(slug as string)}
-              onWarRoomClick={(slug) => {
-                if (offices[slug]) {
-                  const office = offices[slug];
-                  openWarRoom(slug, `${office.name} War Room`);
-                }
-              }}
               onAgentHover={(officeSlug, deskId, clientX, clientY) => {
                 setHoverCard({ deskId, officeSlug: officeSlug as string, x: clientX, y: clientY });
               }}
@@ -1046,15 +1020,14 @@ function HomeInner() {
               contextUsage={contextUsage}
               showGrid={showGrid}
             />
-            {/* Active war rooms — top-right overlay, below tool buttons */}
+            {/* Active groupchats — top-right overlay, below tool buttons */}
             <div className="pointer-events-auto absolute right-3 top-14 z-20 w-64">
-              <ActiveWarRooms
+              <ActiveGroupchats
                 agentNames={agentNameMap}
                 officeNames={officeNameMap}
                 officeAccents={officeAccentMap}
-                onOpen={(slug, meetingId) => {
-                  const office = offices[slug];
-                  openWarRoom(slug, office ? `${office.name} War Room` : "War Room", meetingId);
+                onOpen={(groupchatId) => {
+                  openGroupchat("Groupchat", groupchatId);
                 }}
               />
             </div>
@@ -1203,8 +1176,7 @@ function HomeInner() {
             }}
           />
           <PromptBar
-            agents={sidebarOffice.agents}
-            officeSlug={sidebarSlug}
+            agents={allAgentsWithSlug}
             onSent={({ deskId, isReal }) => {
               if (isReal) selectDesk(deskId);
               void refetchRoster();

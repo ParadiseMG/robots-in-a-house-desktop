@@ -14,11 +14,11 @@ type Agent = {
 type Props = {
   agents: Agent[];
   onClose: () => void;
-  onConveneWarRoom?: (officeSlug: string) => void;
+  onStartGroupchat?: () => void;
   offices?: Array<{ slug: string; name: string; accent: string }>;
 };
 
-export default function NewChatPicker({ agents, onClose, onConveneWarRoom, offices }: Props) {
+export default function NewChatPicker({ agents, onClose, onStartGroupchat, offices }: Props) {
   const { openOrFocus } = useDockTabs();
 
   const grouped = agents.reduce<Record<string, Agent[]>>((acc, a) => {
@@ -64,15 +64,24 @@ export default function NewChatPicker({ agents, onClose, onConveneWarRoom, offic
           onClick={onClose}
           className="font-mono text-[10px] text-white/40 hover:text-white"
         >
-          ✕
+          &#10005;
         </button>
       </div>
 
-      <div className="border-b border-white/10 px-2 py-1.5">
+      <div className="flex gap-1.5 border-b border-white/10 px-2 py-1.5">
+        {onStartGroupchat && (
+          <button
+            type="button"
+            onClick={() => { onStartGroupchat(); onClose(); }}
+            className="flex-1 rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-emerald-400 transition hover:border-emerald-400/60 hover:bg-emerald-500/20"
+          >
+            new groupchat
+          </button>
+        )}
         <button
           type="button"
           onClick={callAll}
-          className="w-full rounded border border-white/20 bg-white/5 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-white/60 transition hover:border-white/40 hover:bg-white/10 hover:text-white"
+          className="flex-1 rounded border border-white/20 bg-white/5 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-white/60 transition hover:border-white/40 hover:bg-white/10 hover:text-white"
         >
           call all
         </button>
@@ -83,26 +92,10 @@ export default function NewChatPicker({ agents, onClose, onConveneWarRoom, offic
           const office = offices?.find((o) => o.slug === slug);
           return (
             <div key={slug}>
-              <div className="mb-1 flex items-center justify-between">
+              <div className="mb-1">
                 <span className="font-mono text-[10px] uppercase tracking-wider text-white/40">
                   {office?.name ?? slug}
                 </span>
-                {onConveneWarRoom && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onConveneWarRoom(slug);
-                      onClose();
-                    }}
-                    className="border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider transition hover:brightness-125"
-                    style={{
-                      borderColor: (office?.accent ?? "#ffffff") + "88",
-                      color: office?.accent ?? "#ffffff",
-                    }}
-                  >
-                    war room
-                  </button>
-                )}
               </div>
               <div className="space-y-0.5">
                 {groupAgents.map((agent) => (

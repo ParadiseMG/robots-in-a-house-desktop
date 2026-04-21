@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { db, getAgent } from "@/server/db";
+import { db, getAgent, getPendingToolApprovals } from "@/server/db";
 
 export const dynamic = "force-dynamic";
 
@@ -23,13 +23,15 @@ type MeetingRow = {
 /**
  * GET /api/notifications
  *
- * Returns three kinds of notifications:
+ * Returns four kinds of notifications:
+ *  - "tool_approval": agent is requesting permission to use a tool (URGENT — must approve/deny)
  *  - "awaiting_input": agent is blocked on a user reply (URGENT — never auto-dismisses,
  *                      clears only when the run transitions out of awaiting_input)
- *  - "synthesis": war room synthesis finished (click → open war room tab)
+ *  - "synthesis": groupchat synthesis finished (click → open groupchat tab)
  *  - "agent_run": regular agent run finished (click → open agent chat tab)
  *
  * Dismissal for done/synthesis: POST /api/runs/[id]/ack (existing endpoint).
+ * Tool approvals: POST /api/tool-approvals/[id]/resolve with action approve/deny.
  * Awaiting_input can't be dismissed — it's active work waiting on the user.
  */
 export async function GET() {
@@ -63,8 +65,11 @@ export async function GET() {
     )
     .all(cutoff) as RunRow[];
 
+  // 3. Pending tool approvals (always urgent)
+  const toolApprovals = getPendingToolApprovals();
+
   const allRuns = [...waitingRuns, ...doneRuns];
-  if (allRuns.length === 0) {
+  if (allRuns.length === 0 && toolApprovals.length === 0) {
     return NextResponse.json({ notifications: [] });
   }
 
@@ -83,7 +88,24 @@ export async function GET() {
     synthesisByRunId.set(m.synthesis_run_id, m);
   }
 
-  const notifications = allRuns.map((run) => {
+  // Convert tool approvals to notifications (always urgent)
+  const toolApprovalNotifications = toolApprovals.map(approval => {
+    const agent = getAgent(approval.office_slug, approval.agent_id);
+    return {
+      kind: "tool_approval" as const,
+      approvalId: approval.id,
+      runId: approval.run_id,
+      at: approval.requested_at,
+      officeSlug: approval.office_slug,
+      agentId: approval.agent_id,
+      agentName: agent?.name ?? approval.agent_id,
+      agentRole: agent?.role ?? "",
+      toolName: approval.tool_name,
+      toolInput: JSON.parse(approval.tool_input),
+    };
+  });
+
+  const runNotifications = allRuns.map((run) => {
     const agent = getAgent(run.office_slug, run.agent_id);
 
     if (run.status === "awaiting_input") {
@@ -128,5 +150,8 @@ export async function GET() {
     };
   });
 
-  return NextResponse.json({ notifications });
+  // Combine all notifications - tool approvals first (urgent), then the rest
+  const allNotifications = [...toolApprovalNotifications, ...runNotifications];
+
+  return NextResponse.json({ notifications: allNotifications });
 }

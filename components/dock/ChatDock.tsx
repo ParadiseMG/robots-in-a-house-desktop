@@ -9,7 +9,7 @@ import {
 } from "@/hooks/useDockTabs";
 import TabStrip from "@/components/dock/TabStrip";
 import ChatTab from "@/components/dock/ChatTab";
-import WarRoomTab from "@/components/dock/WarRoomTab";
+import GroupchatTab from "@/components/dock/GroupchatTab";
 import NewChatPicker from "@/components/dock/NewChatPicker";
 import ReportBugModal from "@/components/errors/ReportBugModal";
 import type { OfficeConfig } from "@/lib/office-types";
@@ -160,7 +160,7 @@ function InnerDockBody({
   rosterEntries: RosterEntry[];
   offices: Record<string, OfficeConfig>;
 }) {
-  const { focusedTab, tabs, openWarRoom } = useDockTabs();
+  const { focusedTab, tabs, openGroupchat } = useDockTabs();
 
   const officeList = Object.values(offices).map((o) => ({
     slug: o.slug,
@@ -190,9 +190,8 @@ function InnerDockBody({
           <NewChatPicker
             agents={agents}
             onClose={() => setPickerOpen(false)}
-            onConveneWarRoom={(slug) => {
-              const office = offices[slug];
-              openWarRoom(slug, office ? `${office.name} War Room` : "War Room");
+            onStartGroupchat={() => {
+              openGroupchat("New Groupchat");
             }}
             offices={officeList}
           />
@@ -209,20 +208,14 @@ function InnerDockBody({
         />
       )}
 
-      {/* Active war-room tab */}
-      {focusedTab && !pickerOpen && focusedTab.kind === "war-room" && (() => {
-        const office = offices[focusedTab.officeSlug];
-        if (!office) return null;
-        return (
-          <WarRoomTab
-            key={focusedTab.id}
-            tabId={focusedTab.id}
-            officeSlug={focusedTab.officeSlug}
-            office={office}
-            roster={rosterEntries}
-          />
-        );
-      })()}
+      {/* Active groupchat tab */}
+      {focusedTab && !pickerOpen && focusedTab.kind === "groupchat" && (
+        <GroupchatTab
+          key={focusedTab.id}
+          tabId={focusedTab.id}
+          allOffices={Object.values(offices)}
+        />
+      )}
     </div>
   );
 }

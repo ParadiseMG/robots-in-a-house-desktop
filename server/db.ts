@@ -101,6 +101,38 @@ function migrate(d: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_meeting_attendees_assignment ON meeting_attendees(assignment_id);
 
+    CREATE TABLE IF NOT EXISTS groupchats (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id),
+      convened_by TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      convened_at INTEGER NOT NULL,
+      target_rounds INTEGER NOT NULL DEFAULT 1,
+      synthesis_run_id TEXT,
+      persistent INTEGER NOT NULL DEFAULT 0,
+      pinned_name TEXT,
+      status TEXT NOT NULL DEFAULT 'active'
+    );
+    CREATE INDEX IF NOT EXISTS idx_groupchats_status ON groupchats(status, convened_at);
+
+    CREATE TABLE IF NOT EXISTS groupchat_members (
+      groupchat_id TEXT NOT NULL REFERENCES groupchats(id),
+      agent_id TEXT NOT NULL,
+      office_slug TEXT NOT NULL,
+      assignment_id TEXT NOT NULL REFERENCES assignments(id),
+      PRIMARY KEY (groupchat_id, agent_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_groupchat_members_assignment ON groupchat_members(assignment_id);
+
+    CREATE TABLE IF NOT EXISTS groupchat_history (
+      id TEXT PRIMARY KEY,
+      groupchat_id TEXT NOT NULL REFERENCES groupchats(id),
+      topic TEXT NOT NULL,
+      outcome TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_groupchat_history ON groupchat_history(groupchat_id, created_at);
+
     CREATE TABLE IF NOT EXISTS prompt_queue (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
@@ -152,6 +184,17 @@ function migrate(d: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_tool_approvals_status ON tool_approvals(status, requested_at);
     CREATE INDEX IF NOT EXISTS idx_tool_approvals_run ON tool_approvals(run_id);
+
+    CREATE TABLE IF NOT EXISTS office_todos (
+      id TEXT PRIMARY KEY,
+      office_slug TEXT NOT NULL,
+      text TEXT NOT NULL,
+      done INTEGER NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      done_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_office_todos_office ON office_todos(office_slug, sort_order);
   `);
 
   // Idempotent column additions for agent_runs (pre-existing DBs)
@@ -861,4 +904,74 @@ export function getToolApprovalByCallId(runId: string, toolCallId: string): Tool
   return db()
     .prepare("SELECT * FROM tool_approvals WHERE run_id = ? AND tool_call_id = ?")
     .get(runId, toolCallId) as ToolApprovalRow | undefined ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Office Todos
+// ---------------------------------------------------------------------------
+
+export type OfficeTodoRow = {
+  id: string;
+  office_slug: string;
+  text: string;
+  done: number; // 0 | 1
+  sort_order: number;
+  created_at: number;
+  done_at: number | null;
+};
+
+export function listTodos(officeSlug: string): OfficeTodoRow[] {
+  return db()
+    .prepare(
+      "SELECT * FROM office_todos WHERE office_slug = ? ORDER BY done ASC, sort_order ASC, created_at ASC",
+    )
+    .all(officeSlug) as OfficeTodoRow[];
+}
+
+export function createTodo(officeSlug: string, text: string): OfficeTodoRow {
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  // Put new items at the end of the incomplete list
+  const maxOrder = (
+    db()
+      .prepare("SELECT MAX(sort_order) AS m FROM office_todos WHERE office_slug = ?")
+      .get(officeSlug) as { m: number | null }
+  ).m ?? -1;
+  db()
+    .prepare(
+      "INSERT INTO office_todos (id, office_slug, text, done, sort_order, created_at) VALUES (?, ?, ?, 0, ?, ?)",
+    )
+    .run(id, officeSlug, text, maxOrder + 1, now);
+  return { id, office_slug: officeSlug, text, done: 0, sort_order: maxOrder + 1, created_at: now, done_at: null };
+}
+
+export function updateTodo(
+  id: string,
+  patch: { text?: string; done?: boolean; sort_order?: number },
+): boolean {
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (patch.text !== undefined) {
+    sets.push("text = ?");
+    vals.push(patch.text);
+  }
+  if (patch.done !== undefined) {
+    sets.push("done = ?", "done_at = ?");
+    vals.push(patch.done ? 1 : 0, patch.done ? Date.now() : null);
+  }
+  if (patch.sort_order !== undefined) {
+    sets.push("sort_order = ?");
+    vals.push(patch.sort_order);
+  }
+  if (sets.length === 0) return false;
+  vals.push(id);
+  const result = db()
+    .prepare(`UPDATE office_todos SET ${sets.join(", ")} WHERE id = ?`)
+    .run(...vals);
+  return result.changes > 0;
+}
+
+export function deleteTodo(id: string): boolean {
+  const result = db().prepare("DELETE FROM office_todos WHERE id = ?").run(id);
+  return result.changes > 0;
 }

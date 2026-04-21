@@ -4,7 +4,7 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
-    "predev": "lsof -ti :3000 | xargs -r kill -9 2>/dev/null; pgrep -f 'next dev|agent-runner' | xargs -r kill -9 2>/dev/null; exit 0",
+    "predev": "curl -sf -o /dev/null --max-time 1 http://localhost:3000 && { echo 'dev server already healthy on :3000 — skipping predev cleanup'; exit 0; } || { lsof -ti :3000 | xargs -r kill -9 2>/dev/null; pgrep -f 'next dev|agent-runner' | xargs -r kill -9 2>/dev/null; exit 0; }",
     "dev": "concurrently -n next,runner -c cyan,magenta \"next dev\" \"tsx server/agent-runner.ts\"",
     "dev:next": "next dev",
     "dev:runner": "tsx server/agent-runner.ts",

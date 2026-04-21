@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useVisibleInterval } from "@/hooks/useVisibleInterval";
 import Tooltip from "@/components/ui/Tooltip";
 
 type SynthesisNotification = {
@@ -9,7 +10,8 @@ type SynthesisNotification = {
   status: "done" | "error";
   at: number;
   officeSlug: string;
-  meetingId: string;
+  meetingId: string; // legacy war-room meetings
+  groupchatId?: string; // new groupchats
   promptSnippet: string;
 };
 
@@ -58,8 +60,8 @@ const URGENT_COLOR = "#fde047"; // amber — matches the `!` desk indicator
 type Props = {
   officeNames: ReadonlyMap<string, string>;
   officeAccents: ReadonlyMap<string, string>;
-  /** Open a war room tab for the given meeting. */
-  onOpenWarRoom: (officeSlug: string, meetingId: string) => void;
+  /** Open a groupchat tab for the given groupchat. */
+  onOpenGroupchat: (groupchatId: string) => void;
   /** Focus the chat for this agent. */
   onOpenAgent: (officeSlug: string, agentId: string) => void;
   /** Handle tool approval request. */
@@ -124,7 +126,7 @@ function timeLabel(ts: number): string {
 export default function NotificationCenter({
   officeNames,
   officeAccents,
-  onOpenWarRoom,
+  onOpenGroupchat,
   onOpenAgent,
   onToolApproval,
 }: Props) {
@@ -133,14 +135,11 @@ export default function NotificationCenter({
   const seenIdsRef = useRef<Set<string>>(new Set());
   const firstLoadRef = useRef(true);
 
-  useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      try {
-        const res = await fetch("/api/notifications");
-        if (!res.ok) return;
-        const j = (await res.json()) as { notifications: Notification[] };
-        if (!alive) return;
+  useVisibleInterval(() => {
+    fetch("/api/notifications")
+      .then((r) => r.ok ? r.json() as Promise<{ notifications: Notification[] }> : null)
+      .then((j) => {
+        if (!j) return;
 
         // Ping if any new notifications arrived since last tick — louder for urgent
         if (!firstLoadRef.current) {
@@ -160,7 +159,6 @@ export default function NotificationCenter({
           const aUrgent = (a.kind === "awaiting_input" || a.kind === "tool_approval") ? 0 : 1;
           const bUrgent = (b.kind === "awaiting_input" || b.kind === "tool_approval") ? 0 : 1;
           if (aUrgent !== bUrgent) return aUrgent - bUrgent;
-          // Within urgent, tool_approval comes first
           if (aUrgent === 0 && bUrgent === 0) {
             if (a.kind === "tool_approval" && b.kind !== "tool_approval") return -1;
             if (b.kind === "tool_approval" && a.kind !== "tool_approval") return 1;
@@ -168,17 +166,9 @@ export default function NotificationCenter({
           return b.at - a.at;
         });
         setNotifs(sorted);
-      } catch {
-        // ignore
-      }
-    };
-    void tick();
-    const id = setInterval(tick, POLL_MS);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, []);
+      })
+      .catch(() => {});
+  }, POLL_MS);
 
   const dismiss = async (runId: string) => {
     // Optimistic
@@ -208,7 +198,8 @@ export default function NotificationCenter({
 
   const handleOpen = (n: Notification) => {
     if (n.kind === "synthesis") {
-      onOpenWarRoom(n.officeSlug, n.meetingId);
+      const gcId = n.groupchatId ?? n.meetingId;
+      onOpenGroupchat(gcId);
       void dismiss(n.runId);
     } else if (n.kind === "agent_run") {
       onOpenAgent(n.officeSlug, n.agentId);
