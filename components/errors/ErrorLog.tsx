@@ -18,7 +18,7 @@ type ErrorEntry = {
   acknowledged_at: number | null;
 };
 
-const POLL_MS = 5000;
+import { ERROR_LOG_POLL_MS } from "@/lib/polling-constants";
 const ERROR_COLOR = "#f87171";
 const WARN_COLOR = "#fbbf24";
 const FATAL_COLOR = "#ef4444";
@@ -78,7 +78,7 @@ export default function ErrorLog({ officeNames, onOpenAgent, activeOfficeSlug, a
         prevCountRef.current = j.unacknowledgedCount;
       })
       .catch(() => {});
-  }, POLL_MS);
+  }, ERROR_LOG_POLL_MS);
 
   const dismiss = async (id: string) => {
     setErrors((prev) => prev.filter((e) => e.id !== id));

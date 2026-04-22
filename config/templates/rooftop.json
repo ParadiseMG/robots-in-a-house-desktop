@@ -1,0 +1,50 @@
+{
+  "id": "rooftop",
+  "name": "Rooftop Deck",
+  "description": "Open-air rooftop workspace. Sky views, planters, string lights. Bright and airy for creative teams.",
+  "tags": ["bright", "open", "creative", "large"],
+  "capacity": { "min": 4, "max": 8 },
+  "grid": { "cols": 24, "rows": 18 },
+  "tile": { "w": 32, "h": 32 },
+  "theme": {
+    "floor": "#c8b898",
+    "floorAlt": "#d8c8a8",
+    "wall": "#a09080",
+    "deskTop": "#c8b898",
+    "deskSide": "#a89878",
+    "accent": "#60a860",
+    "highlight": "#88cc88",
+    "bg": "#88b8d8",
+    "paletteFilter": {
+      "hue": 5,
+      "saturation": 1.05,
+      "brightness": 1.1,
+      "contrast": 1.0
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [8, 33],
+      "monitor": [10, 30]
+    },
+    "premadeRoom": {
+      "layers": ["dontcall_rooftop_layer1.png"],
+      "pixelWidth": 384,
+      "pixelHeight": 288,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Rooftop", "gridX": 2, "gridY": 2, "w": 20, "h": 14 }
+  ],
+  "desks": [
+    { "gridX": 6, "gridY": 4, "facing": "S", "label": "front left" },
+    { "gridX": 12, "gridY": 3, "facing": "S", "label": "front center" },
+    { "gridX": 18, "gridY": 4, "facing": "S", "label": "front right" },
+    { "gridX": 4, "gridY": 9, "facing": "S", "label": "mid left" },
+    { "gridX": 12, "gridY": 8, "facing": "S", "label": "mid center" },
+    { "gridX": 20, "gridY": 9, "facing": "S", "label": "mid right" },
+    { "gridX": 8, "gridY": 13, "facing": "S", "label": "back left" },
+    { "gridX": 15, "gridY": 13, "facing": "S", "label": "back right" }
+  ]
+}

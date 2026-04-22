@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDockTabs } from "@/hooks/useDockTabs";
 import type { OfficeConfig } from "@/lib/office-types";
+
+// ---- Types ----
 
 type MemberRun = {
   round: number;
@@ -19,6 +21,8 @@ type Member = {
   runStatus: string;
   tailSnippet: string | null;
   runs: MemberRun[];
+  dropped?: boolean;
+  dropReason?: string | null;
 };
 
 type Synthesis = {
@@ -40,13 +44,38 @@ type GroupchatState = {
   synthesis: Synthesis | null;
 };
 
+type TimelineEntry =
+  | {
+      type: "agent";
+      agentId: string;
+      agentName: string;
+      agentRole: string;
+      officeSlug: string;
+      round: number;
+      runId: string;
+      status: string;
+      text: string | null;
+      ts: number;
+    }
+  | {
+      type: "user";
+      messageId: string;
+      text: string;
+      ts: number;
+      deliveredInRound: number | null;
+    }
+  | {
+      type: "system";
+      text: string;
+      ts: number;
+    };
+
 type Props = {
   tabId: string;
-  /** All loaded offices — needed to pick agents cross-office */
   allOffices: OfficeConfig[];
 };
 
-const POLL_MS = 1500;
+import { GROUPCHAT_STATE_POLL_MS, GROUPCHAT_TIMELINE_POLL_MS } from "@/lib/polling-constants";
 
 function statusColor(runStatus: string): string {
   if (runStatus === "done") return "#34d399";
@@ -57,6 +86,369 @@ function statusColor(runStatus: string): string {
   return "#a1a1aa";
 }
 
+function relativeTime(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  return new Date(ts).toLocaleTimeString();
+}
+
+// ---- Conversation View ----
+
+function ConversationView({
+  gc,
+  timeline,
+  agentLookup,
+  allOffices,
+  onSendMessage,
+  onNextRound,
+  onNewChat,
+  onPin,
+  onClose,
+  crossTalking,
+  synthesizing,
+  resetting,
+  error,
+}: {
+  gc: GroupchatState;
+  timeline: TimelineEntry[];
+  agentLookup: Map<string, { name: string; role: string; officeSlug: string; officeName: string }>;
+  allOffices: OfficeConfig[];
+  onSendMessage: (text: string, force?: boolean) => Promise<void>;
+  onNextRound: (message?: string) => Promise<void>;
+  onNewChat: () => Promise<void>;
+  onPin: () => void;
+  onClose: () => void;
+  crossTalking: boolean;
+  synthesizing: boolean;
+  resetting: boolean;
+  error: string | null;
+}) {
+  const [inputText, setInputText] = useState("");
+  const [sending, setSending] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const prevLenRef = useRef(0);
+
+  const accentColor = "#10b981";
+
+  // Auto-scroll when new entries arrive
+  useEffect(() => {
+    if (timeline.length > prevLenRef.current && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+    prevLenRef.current = timeline.length;
+  }, [timeline.length]);
+
+  const roundSettled =
+    gc.currentRound > 0 && gc.currentRound === gc.roundsCompleted;
+
+  const agentsRunning = gc.status === "running" && !roundSettled;
+
+  // Connor drives every round — can advance when the current round is settled
+  const canAdvanceRound =
+    roundSettled && !crossTalking && !synthesizing && gc.status !== "idle";
+
+  // Send a user message (always available)
+  const handleSend = useCallback(async (force?: boolean) => {
+    const text = inputText.trim();
+    if (!text) return;
+    setSending(true);
+    try {
+      await onSendMessage(text, force);
+      setInputText("");
+    } finally {
+      setSending(false);
+    }
+  }, [inputText, onSendMessage]);
+
+  // Send + advance round
+  const handleSendAndAdvance = useCallback(async () => {
+    const text = inputText.trim();
+    setSending(true);
+    try {
+      await onNextRound(text || undefined);
+      setInputText("");
+    } finally {
+      setSending(false);
+    }
+  }, [inputText, onNextRound]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        if (canAdvanceRound) {
+          void handleSendAndAdvance();
+        } else {
+          void handleSend();
+        }
+      }
+    },
+    [canAdvanceRound, handleSendAndAdvance, handleSend],
+  );
+
+  // Group consecutive agent entries from same round for visual clustering
+  const getOfficeAccent = (officeSlug: string) => {
+    return allOffices.find((o) => o.slug === officeSlug)?.theme.accent ?? "#888";
+  };
+
+  const progressLabel = (() => {
+    if (gc.status === "idle") return "idle (pinned)";
+    if (crossTalking) return "advancing...";
+    if (roundSettled) return `round ${gc.roundsCompleted} done — your turn`;
+    return `round ${gc.currentRound} — agents responding`;
+  })();
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-white/5 px-3 py-1.5">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-white/40">
+            {gc.pinnedName ?? "groupchat"} - {gc.members.length} agents
+          </span>
+          {/* Member status dots */}
+          <div className="flex items-center gap-1">
+            {gc.members.map((mem) => {
+              const meta = agentLookup.get(mem.agentId);
+              return (
+                <div
+                  key={mem.agentId}
+                  className={`h-2 w-2 rounded-full${mem.dropped ? " opacity-30 line-through" : ""}`}
+                  style={{ backgroundColor: mem.dropped ? "#71717a" : statusColor(mem.runStatus) }}
+                  title={`${meta?.name ?? mem.agentId}: ${mem.dropped ? "dropped" : mem.runStatus}`}
+                />
+              );
+            })}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className="font-mono text-[10px]"
+            style={{
+              color: roundSettled
+                ? accentColor
+                : gc.status === "idle"
+                ? "#71717a"
+                : "#fde047",
+            }}
+          >
+            {progressLabel}
+          </span>
+          {/* New chat — saves memory and resets sessions */}
+          {roundSettled && (
+            <button
+              type="button"
+              onClick={onNewChat}
+              disabled={resetting}
+              className="border border-white/20 px-1.5 py-0.5 font-mono text-[9px] text-white/50 transition hover:text-white/80 disabled:opacity-30"
+              title="Save conversation to memory and start fresh sessions"
+            >
+              {resetting ? "saving..." : "new chat"}
+            </button>
+          )}
+          {/* Pin button */}
+          {!gc.persistent && roundSettled && (
+            <button
+              type="button"
+              onClick={onPin}
+              className="border border-white/20 px-1.5 py-0.5 font-mono text-[9px] text-white/50 transition hover:text-white/80"
+              title="Pin this groupchat"
+            >
+              pin
+            </button>
+          )}
+          {gc.persistent && (
+            <span className="font-mono text-[9px]" style={{ color: accentColor }}>
+              pinned
+            </span>
+          )}
+        </div>
+      </div>
+
+      {error && (
+        <div className="border-b border-red-900/40 bg-red-950/30 px-3 py-1 text-xs text-red-400">
+          {error}
+        </div>
+      )}
+
+      {/* Timeline — conversation view */}
+      <div ref={scrollRef} className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-2">
+        <div className="flex flex-col gap-2">
+          {timeline.map((entry, i) => {
+            // Round divider: insert before the first agent entry of a new round
+            let roundDivider: React.ReactNode = null;
+            if (entry.type === "agent") {
+              const prevEntry = timeline[i - 1];
+              const prevRound = prevEntry?.type === "agent" ? prevEntry.round : 0;
+              if (entry.round > prevRound) {
+                roundDivider = (
+                  <div key={`rd-${entry.round}`} className="flex items-center gap-2 py-2">
+                    <div className="flex-1 border-t border-white/8" />
+                    <span className="font-mono text-[9px] text-white/20 shrink-0">
+                      Round {entry.round}
+                    </span>
+                    <div className="flex-1 border-t border-white/8" />
+                  </div>
+                );
+              }
+            }
+
+            if (entry.type === "system") {
+              return (
+                <div key={`sys-${i}`} className="py-1 text-center font-mono text-[10px] text-white/30">
+                  {entry.text}
+                </div>
+              );
+            }
+
+            if (entry.type === "user") {
+              return (
+                <div key={entry.messageId} className="flex flex-col items-end">
+                  <div className="max-w-[85%]">
+                    <div className="flex items-baseline justify-end gap-2">
+                      <span className="font-mono text-[9px] text-white/30">
+                        {relativeTime(entry.ts)}
+                      </span>
+                      <span className="text-[11px] font-medium text-blue-400">You</span>
+                    </div>
+                    <div className="mt-0.5 whitespace-pre-wrap break-words rounded-lg rounded-tr-sm border border-blue-500/30 bg-blue-950/40 px-3 py-2 text-[12px] leading-snug text-zinc-100">
+                      {entry.text}
+                    </div>
+                    {entry.deliveredInRound == null && (
+                      <div className="mt-0.5 text-right font-mono text-[9px] text-yellow-500/60">
+                        queued for next round
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            // Agent message
+            const accent = getOfficeAccent(entry.officeSlug);
+            const isRunning = entry.status === "running" || entry.status === "starting";
+            return (
+              <div key={`${entry.runId}-${entry.round}`}>
+                {roundDivider}
+                <div className="flex">
+                  <div className="max-w-[85%]">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-[11px] font-medium" style={{ color: accent }}>
+                        {entry.agentName}
+                      </span>
+                      <span className="font-mono text-[9px] text-white/25">
+                        {entry.agentRole}
+                      </span>
+                      <span className="font-mono text-[9px] text-white/30">
+                        {relativeTime(entry.ts)}
+                      </span>
+                    </div>
+                    <div
+                      className="mt-0.5 whitespace-pre-wrap break-words rounded-lg rounded-tl-sm border px-3 py-2 text-[12px] leading-snug text-zinc-200"
+                      style={{
+                        borderColor: isRunning ? accent + "40" : "rgba(255,255,255,0.07)",
+                        backgroundColor: isRunning ? accent + "08" : "rgba(255,255,255,0.03)",
+                      }}
+                    >
+                      {entry.text ?? (
+                        <span className="text-zinc-500">
+                          {isRunning ? (
+                            <span className="animate-pulse">thinking...</span>
+                          ) : entry.status === "error" ? (
+                            "error"
+                          ) : (
+                            "waiting..."
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Typing indicator when round is running */}
+          {gc.status === "running" && !roundSettled && (
+            <div className="py-1 text-center font-mono text-[10px] text-white/25 animate-pulse">
+              agents are responding...
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Input bar — always active */}
+      <div className="border-t border-white/10 px-3 py-2">
+        <div className="flex items-end gap-2">
+          <textarea
+            rows={1}
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={sending}
+            placeholder={
+              gc.status === "idle"
+                ? "type to restart this groupchat..."
+                : canAdvanceRound
+                ? "type a message and hit enter to advance round..."
+                : "type a message... (queued for next round)"
+            }
+            className="flex-1 resize-none rounded border border-white/10 bg-black/50 px-2 py-1.5 font-mono text-xs text-white placeholder:text-white/25 focus:border-white/25 focus:outline-none disabled:opacity-40"
+            style={{ maxHeight: 80 }}
+          />
+          <div className="flex shrink-0 flex-col gap-1">
+            {/* Primary action: send message (always available) */}
+            <button
+              type="button"
+              onClick={() => void handleSend()}
+              disabled={sending || !inputText.trim()}
+              className="rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wider transition disabled:cursor-not-allowed disabled:opacity-30"
+              style={{ borderColor: "#3b82f6" + "99", color: "#3b82f6" }}
+              title="Send message (queued for next round if agents are running)"
+            >
+              {sending ? "..." : "send"}
+            </button>
+            {/* Force send: interrupts running agents and kicks off new round */}
+            {agentsRunning && inputText.trim() && (
+              <button
+                type="button"
+                onClick={() => void handleSend(true)}
+                disabled={sending}
+                className="rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wider transition disabled:cursor-not-allowed disabled:opacity-30"
+                style={{ borderColor: "#ef4444" + "99", color: "#ef4444" }}
+                title="Force send — interrupts running agents and starts a new round with your message"
+              >
+                {sending ? "..." : "force"}
+              </button>
+            )}
+            {/* Secondary: advance round */}
+            {canAdvanceRound && (
+              <button
+                type="button"
+                onClick={() => void handleSendAndAdvance()}
+                disabled={sending || crossTalking}
+                className="rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wider transition disabled:cursor-not-allowed disabled:opacity-30"
+                style={{ borderColor: accentColor + "99", color: accentColor }}
+                title="Send message + advance to next round"
+              >
+                {crossTalking ? "..." : "next round"}
+              </button>
+            )}
+          </div>
+        </div>
+        {!canAdvanceRound && inputText.trim() && gc.status === "running" && (
+          <div className="mt-1 font-mono text-[9px] text-yellow-500/50">
+            message will be included in the next round
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- Main Component ----
+
 export default function GroupchatTab({ tabId, allOffices }: Props) {
   const { dispatch, tabs } = useDockTabs();
   const thisTab = tabs.find((t) => t.id === tabId);
@@ -64,7 +456,15 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
 
   // All agents from all offices for the picker
   const allAgents = useMemo(() => {
-    const agents: Array<{ id: string; name: string; role: string; officeSlug: string; officeName: string; isReal: boolean; deskId: string }> = [];
+    const agents: Array<{
+      id: string;
+      name: string;
+      role: string;
+      officeSlug: string;
+      officeName: string;
+      isReal: boolean;
+      deskId: string;
+    }> = [];
     for (const office of allOffices) {
       for (const a of office.agents) {
         if (!a.isReal) continue;
@@ -82,14 +482,15 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
     return agents;
   }, [allOffices]);
 
-  // Agent lookup map (by agentId — may collide cross-office but unlikely)
   const agentLookup = useMemo(() => {
-    const m = new Map<string, { name: string; role: string; officeSlug: string; officeName: string }>();
+    const m = new Map<
+      string,
+      { name: string; role: string; officeSlug: string; officeName: string }
+    >();
     for (const a of allAgents) m.set(a.id, a);
     return m;
   }, [allAgents]);
 
-  // Group agents by office for picker
   const agentsByOffice = useMemo(() => {
     const m = new Map<string, typeof allAgents>();
     for (const a of allAgents) {
@@ -102,21 +503,25 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
 
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [prompt, setPrompt] = useState("");
-  const [targetRounds, setTargetRounds] = useState(2);
+  const targetRounds = 1; // Connor drives every round manually
   const [submitting, setSubmitting] = useState(false);
   const [crossTalking, setCrossTalking] = useState(false);
-  const [synthesizing, setSynthesizing] = useState(false);
+  const synthesizing = false; // synthesis removed — Connor drives rounds manually
+  const [resetting, setResetting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gc, setGc] = useState<GroupchatState | null>(null);
   const [pinName, setPinName] = useState("");
   const [showPinInput, setShowPinInput] = useState(false);
+  const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
 
   // Hydrate from persisted groupchatId
   useEffect(() => {
     if (gc || !persistedGroupchatId) return;
     (async () => {
       try {
-        const res = await fetch(`/api/groupchats/${encodeURIComponent(persistedGroupchatId)}`);
+        const res = await fetch(
+          `/api/groupchats/${encodeURIComponent(persistedGroupchatId)}`,
+        );
         if (!res.ok) return;
         const j = (await res.json()) as GroupchatState;
         setGc(j);
@@ -159,7 +564,12 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
       const j = (await res.json()) as {
         groupchatId: string;
         convenedAt: number;
-        members: Array<{ agentId: string; officeSlug: string; assignmentId: string; runId: string | null }>;
+        members: Array<{
+          agentId: string;
+          officeSlug: string;
+          assignmentId: string;
+          runId: string | null;
+        }>;
       };
       const newGc: GroupchatState = {
         groupchatId: j.groupchatId,
@@ -182,7 +592,11 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
         synthesis: null,
       };
       setGc(newGc);
-      dispatch({ type: "SET_GROUPCHAT_ID", id: tabId, groupchatId: j.groupchatId });
+      dispatch({
+        type: "SET_GROUPCHAT_ID",
+        id: tabId,
+        groupchatId: j.groupchatId,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -190,48 +604,148 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
     }
   };
 
-  const [roundMessage, setRoundMessage] = useState("");
+  // Send a user message (available anytime, force = interrupt running agents)
+  const sendMessage = useCallback(
+    async (text: string, force?: boolean) => {
+      if (!gc) return;
+      setError(null);
+      try {
+        const res = await fetch(
+          `/api/groupchats/${encodeURIComponent(gc.groupchatId)}/message`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text, force: !!force }),
+          },
+        );
+        if (!res.ok) {
+          const j = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(j.error ?? `send failed (${res.status})`);
+        }
+        // Immediately add to timeline for instant feedback
+        const j = (await res.json()) as { messageId: string; sentAt: number; status: string; forced?: boolean };
+        const sentAt = j.sentAt ?? Date.now();
+        setTimeline((prev) => [
+          ...prev,
+          { type: "user" as const, messageId: j.messageId, text, ts: sentAt, deliveredInRound: null },
+        ]);
+        // If the message triggered a new round (settled or forced), refresh gc state
+        if (j.status === "delivered") {
+          const pollRes = await fetch(
+            `/api/groupchats/${encodeURIComponent(gc.groupchatId)}`,
+          );
+          if (pollRes.ok) {
+            const updated = (await pollRes.json()) as GroupchatState;
+            setGc((prev) => (prev ? { ...prev, ...updated } : prev));
+          }
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [gc],
+  );
 
-  const crossTalk = async (message?: string) => {
-    if (!gc) return;
-    setCrossTalking(true);
+  // Advance round (with optional message)
+  const crossTalk = useCallback(
+    async (message?: string) => {
+      if (!gc) return;
+      setCrossTalking(true);
+      setError(null);
+      try {
+        const body: Record<string, string> = {};
+        if (message?.trim()) body.message = message.trim();
+
+        // Optimistic: show the message immediately
+        if (message?.trim()) {
+          setTimeline((prev) => [
+            ...prev,
+            {
+              type: "user" as const,
+              messageId: `optimistic-${Date.now()}`,
+              text: message.trim(),
+              ts: Date.now(),
+              deliveredInRound: null,
+            },
+          ]);
+        }
+
+        const res = await fetch(
+          `/api/groupchats/${encodeURIComponent(gc.groupchatId)}/round`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+        );
+        if (!res.ok) {
+          const j = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(j.error ?? `round failed (${res.status})`);
+        }
+        // Refresh state
+        const pollRes = await fetch(
+          `/api/groupchats/${encodeURIComponent(gc.groupchatId)}`,
+        );
+        if (pollRes.ok) {
+          const j = (await pollRes.json()) as GroupchatState;
+          setGc((prev) => (prev ? { ...prev, ...j } : prev));
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setCrossTalking(false);
+      }
+    },
+    [gc],
+  );
+
+  // New chat — save memory and reset sessions
+  const newChat = useCallback(async () => {
+    if (!gc || resetting) return;
+    setResetting(true);
     setError(null);
     try {
-      const body: Record<string, string> = {};
-      const msg = message?.trim() || roundMessage.trim();
-      if (msg) body.message = msg;
-      const res = await fetch(`/api/groupchats/${encodeURIComponent(gc.groupchatId)}/round`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await fetch(
+        `/api/groupchats/${encodeURIComponent(gc.groupchatId)}/new-chat`,
+        { method: "POST" },
+      );
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error ?? `round failed (${res.status})`);
+        throw new Error(j.error ?? `new-chat failed (${res.status})`);
       }
-      const pollRes = await fetch(`/api/groupchats/${encodeURIComponent(gc.groupchatId)}`);
+      // Clear timeline and refresh gc state
+      setTimeline([]);
+      const pollRes = await fetch(
+        `/api/groupchats/${encodeURIComponent(gc.groupchatId)}`,
+      );
       if (pollRes.ok) {
-        const j = (await pollRes.json()) as GroupchatState;
-        setGc((prev) => (prev ? { ...prev, ...j } : prev));
+        const updated = (await pollRes.json()) as GroupchatState;
+        setGc((prev) => (prev ? { ...prev, ...updated } : prev));
       }
-      setRoundMessage("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setCrossTalking(false);
+      setResetting(false);
     }
-  };
+  }, [gc, resetting]);
 
   const pinGroupchat = async () => {
     if (!gc || !pinName.trim()) return;
     try {
-      const res = await fetch(`/api/groupchats/${encodeURIComponent(gc.groupchatId)}/pin`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: pinName.trim() }),
-      });
+      const res = await fetch(
+        `/api/groupchats/${encodeURIComponent(gc.groupchatId)}/pin`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: pinName.trim() }),
+        },
+      );
       if (res.ok) {
-        setGc((prev) => prev ? { ...prev, persistent: true, pinnedName: pinName.trim() } : prev);
+        setGc((prev) =>
+          prev
+            ? { ...prev, persistent: true, pinnedName: pinName.trim() }
+            : prev,
+        );
         setShowPinInput(false);
         setPinName("");
       }
@@ -241,20 +755,23 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
   const closeGroupchat = async () => {
     if (!gc) return;
     try {
-      await fetch(`/api/groupchats/${encodeURIComponent(gc.groupchatId)}/close`, {
-        method: "POST",
-      });
-      setGc((prev) => prev ? { ...prev, status: "idle" } : prev);
+      await fetch(
+        `/api/groupchats/${encodeURIComponent(gc.groupchatId)}/close`,
+        { method: "POST" },
+      );
+      setGc((prev) => (prev ? { ...prev, status: "idle" } : prev));
     } catch {}
   };
 
-  // Poll
+  // Poll groupchat state
   useEffect(() => {
     if (!gc) return;
     let cancelled = false;
     const tick = async () => {
       try {
-        const res = await fetch(`/api/groupchats/${encodeURIComponent(gc.groupchatId)}`);
+        const res = await fetch(
+          `/api/groupchats/${encodeURIComponent(gc.groupchatId)}`,
+        );
         if (!res.ok) return;
         const j = (await res.json()) as GroupchatState;
         if (cancelled) return;
@@ -263,100 +780,61 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
     };
     void tick();
     const id = setInterval(() => {
-      const roundsDone = gc.roundsCompleted >= gc.targetRounds;
-      const synthDone =
-        gc.targetRounds <= 1 ||
-        gc.synthesis?.status === "done" ||
-        gc.synthesis?.status === "error";
-      if (gc.status === "done" && roundsDone && synthDone) return;
       if (gc.status === "idle") return;
       void tick();
-    }, POLL_MS);
+    }, GROUPCHAT_STATE_POLL_MS);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [gc?.groupchatId, gc?.status, gc?.synthesis?.status, gc?.roundsCompleted, gc?.targetRounds]);
-
-  // Auto-advance + auto-synthesize
-  const autoAdvanceLockRef = useRef<string>("");
-  const synthesisLockRef = useRef<string>("");
-  useEffect(() => {
-    if (!gc) return;
-    if (crossTalking || synthesizing) return;
-    if (gc.synthesis) return;
-
-    const settled =
-      gc.currentRound > 0 &&
-      gc.roundsCompleted === gc.currentRound;
-    if (!settled) return;
-
-    if (gc.roundsCompleted < gc.targetRounds) {
-      const key = `${gc.groupchatId}:advance:${gc.roundsCompleted}`;
-      if (autoAdvanceLockRef.current === key) return;
-      autoAdvanceLockRef.current = key;
-      void (async () => {
-        setCrossTalking(true);
-        setError(null);
-        try {
-          const res = await fetch(`/api/groupchats/${encodeURIComponent(gc.groupchatId)}/round`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
-          });
-          if (!res.ok) {
-            const j = (await res.json().catch(() => ({}))) as { error?: string };
-            throw new Error(j.error ?? `auto-advance failed (${res.status})`);
-          }
-          const pollRes = await fetch(`/api/groupchats/${encodeURIComponent(gc.groupchatId)}`);
-          if (pollRes.ok) {
-            const j = (await pollRes.json()) as GroupchatState;
-            setGc((prev) => (prev ? { ...prev, ...j } : prev));
-          }
-        } catch (err) {
-          setError(err instanceof Error ? err.message : String(err));
-        } finally {
-          setCrossTalking(false);
-        }
-      })();
-    } else if (gc.targetRounds > 1) {
-      const key = `${gc.groupchatId}:synth`;
-      if (synthesisLockRef.current === key) return;
-      synthesisLockRef.current = key;
-      void (async () => {
-        setSynthesizing(true);
-        setError(null);
-        try {
-          const res = await fetch(`/api/groupchats/${encodeURIComponent(gc.groupchatId)}/synthesize`, {
-            method: "POST",
-          });
-          if (!res.ok) {
-            const j = (await res.json().catch(() => ({}))) as { error?: string };
-            throw new Error(j.error ?? `synthesis failed (${res.status})`);
-          }
-          const pollRes = await fetch(`/api/groupchats/${encodeURIComponent(gc.groupchatId)}`);
-          if (pollRes.ok) {
-            const j = (await pollRes.json()) as GroupchatState;
-            setGc((prev) => (prev ? { ...prev, ...j } : prev));
-          }
-        } catch (err) {
-          setError(err instanceof Error ? err.message : String(err));
-        } finally {
-          setSynthesizing(false);
-        }
-      })();
-    }
   }, [
     gc?.groupchatId,
+    gc?.status,
+    gc?.synthesis?.status,
     gc?.roundsCompleted,
-    gc?.currentRound,
     gc?.targetRounds,
-    gc?.synthesis?.runId,
-    crossTalking,
-    synthesizing,
   ]);
 
-  const accentColor = "#10b981"; // groupchat accent — green
+  // Poll timeline
+  useEffect(() => {
+    if (!gc) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch(
+          `/api/groupchats/${encodeURIComponent(gc.groupchatId)}/timeline`,
+        );
+        if (!res.ok) return;
+        const j = (await res.json()) as { timeline: TimelineEntry[] };
+        if (cancelled) return;
+        // Merge: keep optimistic user messages not yet in the server response
+        setTimeline((prev) => {
+          const serverUserIds = new Set(
+            j.timeline
+              .filter((e): e is Extract<TimelineEntry, { type: "user" }> => e.type === "user")
+              .map((e) => e.messageId),
+          );
+          const optimistic = prev.filter(
+            (e): e is Extract<TimelineEntry, { type: "user" }> =>
+              e.type === "user" && !serverUserIds.has(e.messageId),
+          );
+          if (optimistic.length === 0) return j.timeline;
+          // Append optimistic entries and re-sort by timestamp
+          return [...j.timeline, ...optimistic].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+        });
+      } catch {}
+    };
+    void tick();
+    const id = setInterval(tick, GROUPCHAT_TIMELINE_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [gc?.groupchatId]);
+
+  // No auto-advance — Connor drives every round manually via Send / Next Round.
+
+  const accentColor = "#10b981";
 
   // ---- PICKER (no active groupchat) ----
   if (!gc) {
@@ -369,11 +847,16 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
           </div>
           <div className="flex flex-col gap-2">
             {Array.from(agentsByOffice.entries()).map(([slug, agents]) => {
-              const officeName = allOffices.find((o) => o.slug === slug)?.name ?? slug;
-              const accent = allOffices.find((o) => o.slug === slug)?.theme.accent ?? "#888";
+              const officeName =
+                allOffices.find((o) => o.slug === slug)?.name ?? slug;
+              const accent =
+                allOffices.find((o) => o.slug === slug)?.theme.accent ?? "#888";
               return (
                 <div key={slug}>
-                  <div className="mb-0.5 font-mono text-[9px] uppercase tracking-wider" style={{ color: accent + "99" }}>
+                  <div
+                    className="mb-0.5 font-mono text-[9px] uppercase tracking-wider"
+                    style={{ color: accent + "99" }}
+                  >
                     {officeName}
                   </div>
                   <div className="flex flex-wrap gap-1">
@@ -389,7 +872,11 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
                               ? "border-current text-zinc-100"
                               : "border-white/15 text-zinc-500 hover:text-zinc-300"
                           }`}
-                          style={on ? { borderColor: accent, color: accent } : undefined}
+                          style={
+                            on
+                              ? { borderColor: accent, color: accent }
+                              : undefined
+                          }
                           title={a.role}
                         >
                           {a.name}
@@ -417,45 +904,20 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
           />
         </div>
 
-        {/* Rounds */}
-        <div>
-          <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-white/40">
-            auto rounds
-          </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {[1, 2, 3, 4].map((n) => {
-              const on = targetRounds === n;
-              return (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => setTargetRounds(n)}
-                  className={`rounded-sm border px-2 py-1 font-mono text-[11px] transition ${
-                    on ? "text-zinc-100" : "border-white/15 text-zinc-500 hover:text-zinc-300"
-                  }`}
-                  style={on ? { borderColor: accentColor, color: accentColor } : undefined}
-                >
-                  {n === 1 ? "1 round" : `${n} rounds`}
-                </button>
-              );
-            })}
-            <span className="ml-1 font-mono text-[10px] text-white/30">
-              {targetRounds === 1
-                ? "manual - you drive each round"
-                : `runs ${targetRounds} rounds then synthesizes`}
-            </span>
-          </div>
-        </div>
-
         {error && <div className="text-xs text-red-400">{error}</div>}
 
         <div className="flex items-center justify-between">
           <span className="font-mono text-[10px] text-white/40">
             {picked.size} agent{picked.size === 1 ? "" : "s"}
-            {picked.size > 0 && (() => {
-              const offices = new Set(Array.from(picked).map((id) => agentLookup.get(id)?.officeSlug));
-              return offices.size > 1 ? " (cross-office)" : "";
-            })()}
+            {picked.size > 0 &&
+              (() => {
+                const offices = new Set(
+                  Array.from(picked).map(
+                    (id) => agentLookup.get(id)?.officeSlug,
+                  ),
+                );
+                return offices.size > 1 ? " (cross-office)" : "";
+              })()}
           </span>
           <button
             type="button"
@@ -471,217 +933,61 @@ export default function GroupchatTab({ tabId, allOffices }: Props) {
     );
   }
 
-  // ---- ACTIVE GROUPCHAT ----
-  const autoRunning =
-    gc.targetRounds > 1 &&
-    (gc.roundsCompleted < gc.targetRounds || !gc.synthesis);
-  const canCrossTalk =
-    !autoRunning &&
-    gc.currentRound > 0 &&
-    gc.currentRound === gc.roundsCompleted &&
-    !crossTalking &&
-    !synthesizing &&
-    gc.status !== "idle";
-
-  const progressLabel = (() => {
-    if (gc.status === "idle") return "idle (pinned)";
-    if (gc.synthesis?.status === "done") return "synthesis ready";
-    if (synthesizing || gc.synthesis?.status === "running" || gc.synthesis?.status === "starting") {
-      return "synthesizing...";
-    }
-    if (gc.targetRounds > 1) {
-      return `round ${gc.roundsCompleted}/${gc.targetRounds}${
-        crossTalking ? " - advancing..." : gc.status === "done" ? " - settled" : " - running"
-      }`;
-    }
-    return gc.roundsCompleted > 0
-      ? `round ${gc.roundsCompleted} done`
-      : gc.status === "done"
-      ? "all done"
-      : "in progress";
-  })();
-
+  // ---- ACTIVE GROUPCHAT — Conversation View ----
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-white/5 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-white/40">
-        <span>
-          {gc.pinnedName ?? "groupchat"} - {gc.members.length} agents -{" "}
-          {new Date(gc.convenedAt).toLocaleTimeString()}
-        </span>
-        <div className="flex items-center gap-2">
-          <span
-            style={{
-              color:
-                gc.synthesis?.status === "done" || (gc.status === "done" && !autoRunning)
-                  ? accentColor
-                  : gc.status === "idle"
-                  ? "#71717a"
-                  : "#fde047",
-            }}
-          >
-            {progressLabel}
-          </span>
-          {/* Pin button */}
-          {!gc.persistent && gc.status === "done" && (
+    <>
+      <ConversationView
+        gc={gc}
+        timeline={timeline}
+        agentLookup={agentLookup}
+        allOffices={allOffices}
+        onSendMessage={sendMessage}
+        onNextRound={crossTalk}
+        onNewChat={newChat}
+        onPin={() => setShowPinInput(true)}
+        onClose={closeGroupchat}
+        crossTalking={crossTalking}
+        synthesizing={synthesizing}
+        resetting={resetting}
+        error={error}
+      />
+      {/* Pin dialog overlay */}
+      {showPinInput && (
+        <div className="absolute inset-x-0 bottom-0 border-t border-white/10 bg-zinc-950 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={pinName}
+              onChange={(e) => setPinName(e.target.value)}
+              placeholder="Name this groupchat (e.g. Bug Squad)"
+              className="flex-1 border border-white/10 bg-black/50 px-2 py-1 font-mono text-xs text-white placeholder:text-white/25 focus:outline-none"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void pinGroupchat();
+              }}
+            />
             <button
               type="button"
-              onClick={() => setShowPinInput(true)}
-              className="border border-white/20 px-1.5 py-0.5 text-[9px] text-white/50 hover:text-white/80 transition"
-              title="Pin this groupchat (make persistent)"
+              onClick={() => void pinGroupchat()}
+              disabled={!pinName.trim()}
+              className="border px-2 py-1 font-mono text-[10px] uppercase disabled:opacity-40"
+              style={{ borderColor: accentColor, color: accentColor }}
             >
               pin
             </button>
-          )}
-          {gc.persistent && (
-            <span className="text-[9px]" style={{ color: accentColor }}>pinned</span>
-          )}
-        </div>
-      </div>
-
-      {/* Pin name input */}
-      {showPinInput && (
-        <div className="flex items-center gap-2 border-b border-white/5 px-3 py-2">
-          <input
-            type="text"
-            value={pinName}
-            onChange={(e) => setPinName(e.target.value)}
-            placeholder="Name this groupchat (e.g. Bug Squad)"
-            className="flex-1 border border-white/10 bg-black/50 px-2 py-1 font-mono text-xs text-white placeholder:text-white/25 focus:outline-none"
-            autoFocus
-            onKeyDown={(e) => { if (e.key === "Enter") void pinGroupchat(); }}
-          />
-          <button
-            type="button"
-            onClick={() => void pinGroupchat()}
-            disabled={!pinName.trim()}
-            className="border px-2 py-1 font-mono text-[10px] uppercase disabled:opacity-40"
-            style={{ borderColor: accentColor, color: accentColor }}
-          >
-            pin
-          </button>
-          <button
-            type="button"
-            onClick={() => { setShowPinInput(false); setPinName(""); }}
-            className="font-mono text-[10px] text-white/40 hover:text-white/60"
-          >
-            cancel
-          </button>
-        </div>
-      )}
-
-      {error && <div className="border-b border-red-900/40 bg-red-950/30 px-3 py-1 text-xs text-red-400">{error}</div>}
-
-      {/* Synthesis banner */}
-      {gc.synthesis && (
-        <div
-          className="border-b px-3 py-2"
-          style={{
-            borderColor: accentColor + "40",
-            background: `linear-gradient(180deg, ${accentColor}15 0%, transparent 100%)`,
-          }}
-        >
-          <div
-            className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-wider"
-            style={{ color: accentColor }}
-          >
-            <span>&#9670; findings</span>
-            <span className="opacity-70">
-              {gc.synthesis.status === "done"
-                ? "ready"
-                : gc.synthesis.status === "error"
-                ? "error"
-                : "synthesizing..."}
-            </span>
-          </div>
-          <div className="whitespace-pre-wrap text-[12px] leading-snug text-zinc-100">
-            {gc.synthesis.text ?? (
-              <span className="text-zinc-500">...synthesizing discussion</span>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setShowPinInput(false);
+                setPinName("");
+              }}
+              className="font-mono text-[10px] text-white/40 hover:text-white/60"
+            >
+              cancel
+            </button>
           </div>
         </div>
       )}
-
-      {/* Members grid */}
-      <div className="grid flex-1 grid-cols-2 gap-px overflow-auto bg-white/5">
-        {gc.members.map((mem) => {
-          const meta = agentLookup.get(mem.agentId);
-          const rounds = mem.runs.length > 0 ? mem.runs : [{ round: 1, runId: mem.runId ?? "", status: mem.runStatus, tailSnippet: mem.tailSnippet }];
-
-          return (
-            <div key={mem.agentId} className="flex flex-col gap-0 bg-zinc-950">
-              <div className="flex items-baseline justify-between px-2 pt-2 pb-1">
-                <div>
-                  <div className="text-sm text-zinc-100">{meta?.name ?? mem.agentId}</div>
-                  <div className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-                    {meta?.role ?? ""}{meta?.officeName ? ` - ${meta.officeName}` : ""}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-px">
-                {rounds.map((run) => {
-                  const color = statusColor(run.status);
-                  return (
-                    <div key={run.runId || run.round} className="border-t border-white/5 px-2 py-1.5">
-                      <div className="mb-1 flex items-center justify-between">
-                        <span className="font-mono text-[9px] uppercase tracking-wider text-zinc-600">
-                          round {run.round}
-                        </span>
-                        <span
-                          className="border px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider"
-                          style={{ color, borderColor: color + "66" }}
-                        >
-                          {run.status}
-                        </span>
-                      </div>
-                      <div className="min-h-[48px] whitespace-pre-wrap text-[11px] leading-snug text-zinc-300">
-                        {run.tailSnippet ?? <span className="text-zinc-600">...waiting</span>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Input bar */}
-      <div className="flex items-end gap-2 border-t border-white/10 px-3 py-2">
-        <textarea
-          rows={1}
-          value={roundMessage}
-          onChange={(e) => setRoundMessage(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && canCrossTalk) {
-              e.preventDefault();
-              void crossTalk();
-            }
-          }}
-          disabled={!canCrossTalk}
-          placeholder={
-            gc.status === "idle"
-              ? "post a new topic to restart..."
-              : autoRunning
-              ? "auto-run in progress..."
-              : canCrossTalk
-              ? "steer the next round... or leave blank to let them talk"
-              : "waiting for round to finish..."
-          }
-          className="flex-1 resize-none rounded border border-white/10 bg-black/50 px-2 py-1.5 font-mono text-xs text-white placeholder:text-white/25 focus:border-white/25 focus:outline-none disabled:opacity-40"
-          style={{ maxHeight: 80 }}
-        />
-        <button
-          type="button"
-          onClick={() => void crossTalk()}
-          disabled={!canCrossTalk && gc.status !== "idle"}
-          className="shrink-0 rounded border px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider transition disabled:cursor-not-allowed disabled:opacity-30"
-          style={{ borderColor: accentColor + "99", color: accentColor }}
-        >
-          {crossTalking ? "..." : roundMessage.trim() ? "send" : gc.status === "idle" ? "restart" : "next round"}
-        </button>
-      </div>
-    </div>
+    </>
   );
 }

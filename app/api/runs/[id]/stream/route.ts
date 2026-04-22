@@ -1,4 +1,5 @@
 import { db } from "@/server/db";
+import { STREAM_POLL_MS } from "@/lib/polling-constants";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +10,6 @@ export async function GET(
   const { id: runId } = await params;
 
   const encoder = new TextEncoder();
-  const POLL_MS = 250;
 
   let closed = false;
   const stream = new ReadableStream({
@@ -61,7 +61,7 @@ export async function GET(
           closed = true;
           return;
         }
-        setTimeout(tick, POLL_MS);
+        setTimeout(tick, STREAM_POLL_MS);
       };
 
       // prime with a retry hint and kick the loop

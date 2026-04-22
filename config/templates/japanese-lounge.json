@@ -1,0 +1,48 @@
+{
+  "id": "japanese-lounge",
+  "name": "Japanese Lounge",
+  "description": "Warm wood interior with tatami mats and low furniture. Cozy and focused. Great for small teams.",
+  "tags": ["cozy", "warm", "small", "focused"],
+  "capacity": { "min": 2, "max": 5 },
+  "grid": { "cols": 19, "rows": 14 },
+  "tile": { "w": 48, "h": 48 },
+  "theme": {
+    "floor": "#c4956a",
+    "floorAlt": "#d4a878",
+    "wall": "#8a6a4a",
+    "deskTop": "#b8965a",
+    "deskSide": "#8a6a3e",
+    "accent": "#d4956a",
+    "highlight": "#e8c898",
+    "bg": "#5a4030",
+    "paletteFilter": {
+      "hue": 8,
+      "saturation": 1.05,
+      "brightness": 1.0,
+      "contrast": 1.0
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [4, 33],
+      "monitor": [10, 30]
+    },
+    "premadeRoom": {
+      "layers": ["paradise_japanese_lounge_layer1.png", "paradise_japanese_lounge_layer2.png"],
+      "pixelWidth": 304,
+      "pixelHeight": 214,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Lounge", "gridX": 1, "gridY": 1, "w": 17, "h": 10 }
+  ],
+  "desks": [
+    { "gridX": 9, "gridY": 3, "facing": "S", "label": "center front" },
+    { "gridX": 4, "gridY": 5, "facing": "S", "label": "left" },
+    { "gridX": 14, "gridY": 5, "facing": "S", "label": "right" },
+    { "gridX": 7, "gridY": 8, "facing": "S", "label": "back left" },
+    { "gridX": 12, "gridY": 8, "facing": "S", "label": "back right" }
+  ],
+  "preview": "paradise_japanese_lounge_preview.png"
+}

@@ -29,6 +29,9 @@ type AgentEntry = {
   deskId: string;
   isReal: boolean;
   officeSlug: string;
+  model?: string | null;
+  isHead?: boolean;
+  isDeptHead?: boolean;
 };
 
 type Props = {
@@ -38,6 +41,8 @@ type Props = {
   deskRunStatus?: ReadonlyMap<string, string>;
   onAckDesk?: (deskId: string) => void;
   activeOfficeSlug?: string | null;
+  /** "bottom" (default) = fixed-height bottom dock. "side" = fills parent height. */
+  layout?: "bottom" | "side";
 };
 
 const MIN_HEIGHT = 120;
@@ -54,12 +59,13 @@ export function DockTabsProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function ChatDock({ agents = [], rosterEntries = [], offices = {}, deskRunStatus, onAckDesk, activeOfficeSlug }: Props) {
+export default function ChatDock({ agents = [], rosterEntries = [], offices = {}, deskRunStatus, onAckDesk, activeOfficeSlug, layout = "bottom" }: Props) {
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [collapsed, setCollapsed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [reportBugOpen, setReportBugOpen] = useState(false);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const isSide = layout === "side";
 
   const onResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -85,11 +91,11 @@ export default function ChatDock({ agents = [], rosterEntries = [], offices = {}
 
   return (
     <div
-      className="relative flex w-full flex-col border-t border-white/10 bg-zinc-950"
-      style={{ height: actualHeight, minHeight: actualHeight, maxHeight: actualHeight }}
+      className={`relative flex flex-col bg-zinc-950 ${isSide ? "h-full w-full" : "w-full border-t border-white/10"}`}
+      style={isSide ? undefined : { height: actualHeight, minHeight: actualHeight, maxHeight: actualHeight }}
     >
-      {/* Drag handle */}
-      {!collapsed && (
+      {/* Drag handle — bottom layout only */}
+      {!isSide && !collapsed && (
         <div
           onMouseDown={onResizeMouseDown}
           className="absolute -top-1 left-0 right-0 z-10 h-2 cursor-ns-resize opacity-0 hover:opacity-100"
@@ -104,10 +110,11 @@ export default function ChatDock({ agents = [], rosterEntries = [], offices = {}
         deskRunStatus={deskRunStatus}
         onAckDesk={onAckDesk}
         onReportBug={() => setReportBugOpen(true)}
+        agents={agents}
       />
 
       {!collapsed && (
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <InnerDockBody
             pickerOpen={pickerOpen}
             setPickerOpen={setPickerOpen}
@@ -169,7 +176,7 @@ function InnerDockBody({
   }));
 
   return (
-    <div className="relative flex min-h-0 flex-1">
+    <div className="relative flex min-h-0 min-w-0 flex-1">
       {/* Empty state */}
       {tabs.length === 0 && !pickerOpen && (
         <div className="flex flex-1 items-center justify-center font-mono text-xs text-white/30">

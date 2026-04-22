@@ -15,6 +15,7 @@ import { resolve, join } from "node:path";
 import { readFileSync, appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { RUNNER_APPROVAL_POLL_MS } from "../lib/polling-constants.js";
 import {
   db,
   getAgent,
@@ -82,7 +83,13 @@ const ALLOWED_RUN_COLUMNS = new Set([
 function updateRun(runId: string, patch: Partial<AgentRunRow>) {
   const cols = Object.keys(patch).filter((c) => ALLOWED_RUN_COLUMNS.has(c));
   if (cols.length === 0) return;
-  const sql = `UPDATE agent_runs SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE id = ?`;
+  // If setting a terminal status (done/error), only update if the run hasn't been
+  // force-interrupted externally (e.g. by groupchat force-send).
+  const isTerminal = patch.status === "done" || patch.status === "error";
+  const where = isTerminal
+    ? `WHERE id = ? AND error IS NOT 'force_interrupted'`
+    : `WHERE id = ?`;
+  const sql = `UPDATE agent_runs SET ${cols.map((c) => `${c} = ?`).join(", ")} ${where}`;
   db().prepare(sql).run(...cols.map((c) => (patch as Record<string, unknown>)[c]), runId);
 }
 
@@ -575,10 +582,9 @@ function makeDelegateServer(
           // their run stays "running" in the UI while we wait. Child finishing
           // fires the 'done' status event and updateRun flips status to done.
           const MAX_WAIT_MS = 30 * 60 * 1000; // 30 min hard cap
-          const POLL_MS = 2000;
           const start = Date.now();
           while (Date.now() - start < MAX_WAIT_MS) {
-            await new Promise((r) => setTimeout(r, POLL_MS));
+            await new Promise((r) => setTimeout(r, RUNNER_APPROVAL_POLL_MS));
             const s = getDelegationStatus(result.runId, delegatorAgentId);
             if (!s) {
               return {
@@ -1052,10 +1058,9 @@ Instructions:
 
           // Poll for Switch to finish (should be quick — 15-60s for roster read + create)
           const MAX_WAIT_MS = 3 * 60 * 1000; // 3 min cap
-          const POLL_MS = 2000;
           const start = Date.now();
           while (Date.now() - start < MAX_WAIT_MS) {
-            await new Promise((r) => setTimeout(r, POLL_MS));
+            await new Promise((r) => setTimeout(r, RUNNER_APPROVAL_POLL_MS));
             const row = d
               .prepare("SELECT status, error FROM agent_runs WHERE id = ?")
               .get(switchRunId) as { status: string; error: string | null } | undefined;

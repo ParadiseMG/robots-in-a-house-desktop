@@ -298,7 +298,7 @@ export default function ChatTab({
 
   return (
     <div
-      className={`relative flex min-h-0 flex-1 flex-col transition-colors ${dragOver ? "bg-sky-500/5" : ""}`}
+      className={`relative flex min-h-0 min-w-0 flex-1 flex-col transition-colors ${dragOver ? "bg-sky-500/5" : ""}`}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
@@ -309,21 +309,27 @@ export default function ChatTab({
           <span className="font-mono text-xs text-sky-300">drop to attach</span>
         </div>
       )}
-      {/* New chat button — top right */}
-      {isReal && (
-        <div className="absolute right-2 top-2 z-20">
+      {/* Agent name header + new chat button */}
+      <div className="flex shrink-0 items-center justify-between border-b border-white/8 px-3 py-1.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="truncate font-mono text-xs font-medium text-white/80">{agentName}</span>
+          {inspection?.agent?.role && (
+            <span className="truncate font-mono text-[10px] text-white/30">{inspection.agent.role}</span>
+          )}
+        </div>
+        {isReal && (
           <Tooltip label="Agent saves memory, then resets">
             <button
               type="button"
               onClick={onNewChat}
               disabled={resetting || isLive}
-              className="rounded border border-white/15 bg-black/70 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-white/40 backdrop-blur transition hover:border-white/30 hover:text-white/70 disabled:opacity-30"
+              className="shrink-0 rounded border border-white/15 bg-black/70 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-white/40 backdrop-blur transition hover:border-white/30 hover:text-white/70 disabled:opacity-30"
             >
               {resetting ? "resetting..." : "new chat"}
             </button>
           </Tooltip>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Message area */}
       <MessageList

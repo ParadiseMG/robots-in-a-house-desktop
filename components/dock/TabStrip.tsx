@@ -1,9 +1,29 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useDockTabs, type DockTab } from "@/hooks/useDockTabs";
 import Tooltip from "@/components/ui/Tooltip";
 import { useVisibleInterval } from "@/hooks/useVisibleInterval";
+
+type AgentEntry = {
+  id: string;
+  name: string;
+  role: string;
+  deskId: string;
+  isReal: boolean;
+  officeSlug: string;
+  model?: string | null;
+  isHead?: boolean;
+  isDeptHead?: boolean;
+};
+
+const modelLabel = (m?: string | null) => {
+  const s = (m ?? "").toLowerCase();
+  if (s.includes("opus")) return "opus";
+  if (s.includes("haiku")) return "haiku";
+  if (s.includes("sonnet")) return "sonnet";
+  return m ?? "sonnet";
+};
 
 type AgentStatus = { agentId: string; status: string };
 type GroupchatSummary = {
@@ -45,6 +65,7 @@ type Props = {
   deskRunStatus?: ReadonlyMap<string, string>;
   onAckDesk?: (deskId: string) => void;
   onReportBug?: () => void;
+  agents?: AgentEntry[];
 };
 
 function tabStateColor(status: string | undefined): {
@@ -127,12 +148,37 @@ export default function TabStrip({
   deskRunStatus,
   onAckDesk,
   onReportBug,
+  agents = [],
 }: Props) {
   const { tabs, focusedId, focus, close, reorder, moveToEnd } = useDockTabs();
   const groupchatStatuses = useGroupchatStatuses();
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [dragOverEnd, setDragOverEnd] = useState<boolean>(false);
   const dragIdRef = useRef<string | null>(null);
+  const [hoverTabId, setHoverTabId] = useState<string | null>(null);
+  const [hoverPos, setHoverPos] = useState<{ left: number; top: number } | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const agentByDeskId = useCallback(
+    (deskId: string | undefined) => agents.find((a) => a.deskId === deskId),
+    [agents],
+  );
+
+  const showHover = useCallback((tabId: string, el: HTMLElement) => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      const rect = el.getBoundingClientRect();
+      setHoverTabId(tabId);
+      setHoverPos({ left: rect.left + rect.width / 2, top: rect.top });
+    }, 350);
+  }, []);
+
+  const hideHover = useCallback(() => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = null;
+    setHoverTabId(null);
+    setHoverPos(null);
+  }, []);
 
   // Cmd+1/2/3 shortcuts
   useEffect(() => {
@@ -180,6 +226,7 @@ export default function TabStrip({
                 dragIdRef.current = tab.id;
                 e.dataTransfer.effectAllowed = "move";
                 e.dataTransfer.setData("text/plain", tab.id);
+                hideHover();
               }}
               onDragOver={(e) => {
                 e.preventDefault();
@@ -204,6 +251,10 @@ export default function TabStrip({
                 setDragOverEnd(false);
                 dragIdRef.current = null;
               }}
+              onMouseEnter={(e) => {
+                if (tab.kind === "1:1" && tab.deskId) showHover(tab.id, e.currentTarget);
+              }}
+              onMouseLeave={hideHover}
             >
               {dragOverId === tab.id && (
                 <div className="pointer-events-none absolute inset-y-1 left-0 w-0.5 rounded-full bg-white/60" />
@@ -280,6 +331,48 @@ export default function TabStrip({
           <span className="text-sm font-light">+</span>
         </button>
       </Tooltip>
+
+      {/* Agent bio hover card */}
+      {hoverTabId && hoverPos && (() => {
+        const tab = tabs.find((t) => t.id === hoverTabId);
+        if (!tab || tab.kind !== "1:1" || !tab.deskId) return null;
+        const agent = agentByDeskId(tab.deskId);
+        if (!agent) return null;
+        const ml = modelLabel(agent.model);
+        const isOpus = ml === "opus";
+        const status = tab.deskId ? deskRunStatus?.get(tab.deskId) : undefined;
+        return (
+          <div
+            className="fixed z-50 w-48 rounded-md border border-white/15 bg-zinc-900/95 p-2.5 shadow-xl backdrop-blur-sm pointer-events-none"
+            style={{ left: hoverPos.left - 96, top: hoverPos.top - 8, transform: "translateY(-100%)" }}
+          >
+            <div className="mb-1.5 text-sm font-medium text-white">{agent.name}</div>
+            <div className="mb-2 text-[11px] leading-snug text-white/50">{agent.role}</div>
+            <div className="flex flex-wrap gap-1 font-mono text-[9px] uppercase tracking-wider">
+              <span className={agent.isReal ? "rounded bg-emerald-400/20 px-1.5 py-0.5 text-emerald-300" : "rounded bg-white/10 px-1.5 py-0.5 text-white/50"}>
+                {agent.isReal ? "real" : "sim"}
+              </span>
+              {agent.isReal && (
+                <span className={isOpus ? "rounded bg-purple-400/20 px-1.5 py-0.5 text-purple-300" : "rounded bg-sky-400/15 px-1.5 py-0.5 text-sky-300"}>
+                  {ml}
+                </span>
+              )}
+              {agent.isHead && (
+                <span className="rounded bg-amber-400/20 px-1.5 py-0.5 text-amber-300">head</span>
+              )}
+              {agent.isDeptHead && !agent.isHead && (
+                <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-amber-200">dept head</span>
+              )}
+              {status && status !== "idle" && (
+                <span className={`rounded bg-white/5 px-1.5 py-0.5 ${tabStateColor(status).text || "text-white/40"}`}>
+                  {status === "done_unacked" ? "done" : status}
+                </span>
+              )}
+            </div>
+            <div className="mt-2 font-mono text-[10px] text-white/25">{agent.officeSlug} / {agent.id}</div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

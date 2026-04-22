@@ -1,0 +1,46 @@
+{
+  "id": "ice-cream-shop",
+  "name": "Ice Cream Shop",
+  "description": "Tiny colorful storefront. Perfect for a solo agent or a pair. The starter office.",
+  "tags": ["tiny", "colorful", "starter", "fun"],
+  "capacity": { "min": 1, "max": 3 },
+  "grid": { "cols": 12, "rows": 10 },
+  "tile": { "w": 48, "h": 48 },
+  "theme": {
+    "floor": "#e8d8c8",
+    "floorAlt": "#f0e4d4",
+    "wall": "#f5a0b0",
+    "deskTop": "#e8c8a8",
+    "deskSide": "#c8a888",
+    "accent": "#f0728a",
+    "highlight": "#ffa8b8",
+    "bg": "#f8e8e0",
+    "paletteFilter": {
+      "hue": 5,
+      "saturation": 1.15,
+      "brightness": 1.08,
+      "contrast": 1.0
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [8, 33],
+      "monitor": [10, 30]
+    },
+    "premadeRoom": {
+      "layers": ["paradise_icecream_shop_layer1.png"],
+      "pixelWidth": 192,
+      "pixelHeight": 160,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Shop Floor", "gridX": 1, "gridY": 1, "w": 10, "h": 7 }
+  ],
+  "desks": [
+    { "gridX": 5, "gridY": 3, "facing": "S", "label": "counter center" },
+    { "gridX": 3, "gridY": 6, "facing": "S", "label": "corner booth left" },
+    { "gridX": 8, "gridY": 6, "facing": "S", "label": "corner booth right" }
+  ],
+  "preview": "paradise_icecream_shop_preview.png"
+}

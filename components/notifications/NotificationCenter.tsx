@@ -10,8 +10,7 @@ type SynthesisNotification = {
   status: "done" | "error";
   at: number;
   officeSlug: string;
-  meetingId: string; // legacy war-room meetings
-  groupchatId?: string; // new groupchats
+  groupchatId: string;
   promptSnippet: string;
 };
 
@@ -68,7 +67,7 @@ type Props = {
   onToolApproval?: (approvalId: string, action: "approve" | "deny", reason?: string) => void;
 };
 
-const POLL_MS = 3000;
+import { NOTIFICATION_POLL_MS } from "@/lib/polling-constants";
 
 /** Two-tone ping using Web Audio — "done" is soft, "urgent" is higher + louder. */
 function playPing(variant: "done" | "urgent" = "done") {
@@ -168,7 +167,7 @@ export default function NotificationCenter({
         setNotifs(sorted);
       })
       .catch(() => {});
-  }, POLL_MS);
+  }, NOTIFICATION_POLL_MS);
 
   const dismiss = async (runId: string) => {
     // Optimistic
@@ -198,7 +197,7 @@ export default function NotificationCenter({
 
   const handleOpen = (n: Notification) => {
     if (n.kind === "synthesis") {
-      const gcId = n.groupchatId ?? n.meetingId;
+      const gcId = n.groupchatId;
       onOpenGroupchat(gcId);
       void dismiss(n.runId);
     } else if (n.kind === "agent_run") {

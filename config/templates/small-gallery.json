@@ -1,0 +1,49 @@
+{
+  "id": "small-gallery",
+  "name": "Small Gallery",
+  "description": "Compact dark gallery. Intimate and minimal. Good for a focused 2-4 person squad.",
+  "tags": ["dark", "compact", "minimal", "focused"],
+  "capacity": { "min": 2, "max": 4 },
+  "grid": { "cols": 16, "rows": 10 },
+  "tile": { "w": 48, "h": 48 },
+  "theme": {
+    "floor": "#2a2830",
+    "floorAlt": "#343240",
+    "wall": "#1a1820",
+    "deskTop": "#3a3840",
+    "deskSide": "#2a2830",
+    "accent": "#c88040",
+    "highlight": "#e8a060",
+    "bg": "#121018",
+    "paletteFilter": {
+      "hue": -8,
+      "saturation": 0.8,
+      "brightness": 0.95,
+      "contrast": 1.1,
+      "tint": "#c88040",
+      "tintStrength": 0.05
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [4, 33],
+      "monitor": [12, 30]
+    },
+    "premadeRoom": {
+      "layers": ["dontcall_museum_room4_layer1.png", "dontcall_museum_room4_layer2.png"],
+      "pixelWidth": 256,
+      "pixelHeight": 160,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Gallery", "gridX": 1, "gridY": 1, "w": 14, "h": 7 }
+  ],
+  "desks": [
+    { "gridX": 4, "gridY": 3, "facing": "S", "label": "left" },
+    { "gridX": 11, "gridY": 3, "facing": "S", "label": "right" },
+    { "gridX": 4, "gridY": 6, "facing": "S", "label": "back left" },
+    { "gridX": 11, "gridY": 6, "facing": "S", "label": "back right" }
+  ],
+  "preview": "dontcall_museum_room4_preview.png"
+}

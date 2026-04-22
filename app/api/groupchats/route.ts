@@ -8,7 +8,7 @@ const RUNNER_URL = process.env.RUNNER_URL ?? "http://127.0.0.1:3100";
 
 const SETTLED = new Set(["done", "error"]);
 
-type MeetingRow = {
+type GroupchatRow = {
   id: string;
   convened_by: string;
   prompt: string;
@@ -31,20 +31,20 @@ export const GET = withErrorReporting("GET /api/groupchats", async (req: Request
   const filter = url.searchParams.get("status") ?? "active";
   const d = db();
 
-  let rows: MeetingRow[];
+  let rows: GroupchatRow[];
   if (filter === "persistent") {
     rows = d
       .prepare(
         "SELECT id, convened_by, prompt, convened_at, persistent, pinned_name, status FROM groupchats WHERE persistent = 1 ORDER BY convened_at DESC",
       )
-      .all() as MeetingRow[];
+      .all() as GroupchatRow[];
   } else if (filter === "recent") {
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     rows = d
       .prepare(
         "SELECT id, convened_by, prompt, convened_at, persistent, pinned_name, status FROM groupchats WHERE convened_at > ? ORDER BY convened_at DESC",
       )
-      .all(cutoff) as MeetingRow[];
+      .all(cutoff) as GroupchatRow[];
   } else {
     rows = d
       .prepare(
@@ -55,7 +55,7 @@ export const GET = withErrorReporting("GET /api/groupchats", async (req: Request
          WHERE ar.status IN ('starting', 'running', 'awaiting_input')
          ORDER BY g.convened_at DESC`,
       )
-      .all() as MeetingRow[];
+      .all() as GroupchatRow[];
   }
 
   // Also include idle persistent groupchats in active/recent views
@@ -65,7 +65,7 @@ export const GET = withErrorReporting("GET /api/groupchats", async (req: Request
       .prepare(
         "SELECT id, convened_by, prompt, convened_at, persistent, pinned_name, status FROM groupchats WHERE persistent = 1 AND status = 'idle'",
       )
-      .all() as MeetingRow[];
+      .all() as GroupchatRow[];
     for (const r of idle) {
       if (!persistentIds.has(r.id)) rows.push(r);
     }

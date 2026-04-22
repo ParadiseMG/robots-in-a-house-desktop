@@ -15,11 +15,13 @@ type Todo = {
 type Props = {
   officeSlug: string;
   accent?: string;
+  label?: string;
+  defaultCollapsed?: boolean;
 };
 
-export default function OfficeTodos({ officeSlug, accent = "#5aa0ff" }: Props) {
+export default function OfficeTodos({ officeSlug, accent = "#5aa0ff", label, defaultCollapsed = false }: Props) {
   const [todos, setTodos] = useState<Todo[]>([]);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [newText, setNewText] = useState("");
   const [editId, setEditId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
@@ -101,7 +103,7 @@ export default function OfficeTodos({ officeSlug, accent = "#5aa0ff" }: Props) {
         className="flex w-full items-center justify-between px-3 py-2 text-left"
       >
         <span className="font-mono text-[10px] uppercase tracking-wider text-white/50">
-          to-do
+          {label ? `${label} to-do` : "to-do"}
         </span>
         <span className="flex items-center gap-1.5">
           {count > 0 && (
@@ -132,7 +134,7 @@ export default function OfficeTodos({ officeSlug, accent = "#5aa0ff" }: Props) {
               value={newText}
               onChange={(e) => setNewText(e.target.value)}
               placeholder="add item..."
-              className="min-w-0 flex-1 bg-transparent px-1 py-0.5 font-mono text-xs text-white/80 placeholder:text-white/20 focus:outline-none"
+              className="min-w-0 flex-1 bg-transparent px-1 py-0.5 font-mono text-xs text-white/80 placeholder:text-white/40 focus:outline-none"
             />
             {newText.trim() && (
               <button

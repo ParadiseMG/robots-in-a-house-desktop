@@ -63,7 +63,7 @@ function buildStation(
   return { ...base, modules };
 }
 
-const ROSTER_POLL_MS = 5_000;
+import { ROSTER_POLL_MS } from "@/lib/polling-constants";
 
 type RosterEntry = {
   agent: {
@@ -122,8 +122,16 @@ function HomeInner() {
       .then((r) => r.json())
       .then((data: { offices: Record<string, OfficeConfig>; slugs: string[]; station?: StationConfig | null }) => {
         setOffices(data.offices);
-        setOrder(data.slugs);
-        setStation(buildStation(data.slugs, data.offices, data.station));
+        // Restore saved pill order, merging in any new offices
+        const saved = (() => {
+          try { return JSON.parse(localStorage.getItem("ri-pill-order") ?? "null"); } catch { return null; }
+        })() as string[] | null;
+        const slugs = data.slugs as string[];
+        const ordered = saved
+          ? [...saved.filter((s: string) => slugs.includes(s)), ...slugs.filter((s) => !saved.includes(s))]
+          : slugs;
+        setOrder(ordered);
+        setStation(buildStation(ordered, data.offices, data.station));
         setOfficesLoaded(true);
         // Redirect to setup if no offices exist
         if (data.slugs.length === 0) {
@@ -132,6 +140,13 @@ function HomeInner() {
       })
       .catch(() => setOfficesLoaded(true));
   }, []);
+
+  // Persist pill order to localStorage
+  useEffect(() => {
+    if (order.length > 0) {
+      localStorage.setItem("ri-pill-order", JSON.stringify(order));
+    }
+  }, [order]);
 
   // The office whose sidebar + roster data is shown. Always a real slug (never null).
   const [sidebarSlug, setSidebarSlug] = useState<string>("");
@@ -173,6 +188,7 @@ function HomeInner() {
     y: number;
   } | null>(null);
   const agentPositionsRef = useRef<Map<string, { clientX: number; clientY: number }>>(new Map());
+  const pillDragIdx = useRef<number | null>(null);
 
   // Ambient stream — track active runs for non-focused agents
   const activeRuns = useMemo(() => {
@@ -290,7 +306,7 @@ function HomeInner() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [focusModule]);
+  }, [focusModule, order]);
 
   const selectDesk = useCallback(
     (deskId: string | null, officeSlug?: string) => {
@@ -307,9 +323,10 @@ function HomeInner() {
     [sidebarSlug],
   );
 
-  // G toggles grid overlay
+  // G toggles grid overlay (canvas view only — grid view uses G for select mode)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (viewMode !== "canvas") return;
       if (e.key.toLowerCase() !== "g") return;
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea") return;
@@ -317,7 +334,7 @@ function HomeInner() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [viewMode]);
 
   // Fetch tasks for sidebar office
   useEffect(() => {
@@ -522,6 +539,7 @@ function HomeInner() {
       officeSlug: string; officeName: string; accent: string;
       premade: string | null; status: string | null;
       activeDelegations: number; teamSize: number; isHead: boolean;
+      isDeptHead: boolean;
     }> = [];
     for (const slug of order) {
       const office = offices[slug];
@@ -544,6 +562,7 @@ function HomeInner() {
           activeDelegations: entry?.activeDelegations ?? 0,
           teamSize,
           isHead: a.isHead ?? false,
+          isDeptHead: a.isDeptHead ?? false,
         });
       }
     }
@@ -562,17 +581,36 @@ function HomeInner() {
       return JSON.parse(localStorage.getItem("ri-quickview-pins") ?? "[]");
     } catch { return []; }
   });
+  // Hidden agent IDs — allows removing heads from quick view
+  const [quickViewHidden, setQuickViewHidden] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      return JSON.parse(localStorage.getItem("ri-quickview-hidden") ?? "[]");
+    } catch { return []; }
+  });
   const pinAgent = (id: string) => {
+    // Add to pins + unhide if previously hidden
     setQuickViewPins((prev) => {
-      const next = [...prev, id];
+      const next = prev.includes(id) ? prev : [...prev, id];
       localStorage.setItem("ri-quickview-pins", JSON.stringify(next));
+      return next;
+    });
+    setQuickViewHidden((prev) => {
+      const next = prev.filter((h) => h !== id);
+      localStorage.setItem("ri-quickview-hidden", JSON.stringify(next));
       return next;
     });
   };
   const unpinAgent = (id: string) => {
+    // Remove from pins + add to hidden (so heads stay gone)
     setQuickViewPins((prev) => {
       const next = prev.filter((p) => p !== id);
       localStorage.setItem("ri-quickview-pins", JSON.stringify(next));
+      return next;
+    });
+    setQuickViewHidden((prev) => {
+      const next = prev.includes(id) ? prev : [...prev, id];
+      localStorage.setItem("ri-quickview-hidden", JSON.stringify(next));
       return next;
     });
   };
@@ -795,6 +833,9 @@ function HomeInner() {
       deskId: a.deskId,
       isReal: a.isReal,
       officeSlug: a.officeSlug,
+      model: a.model ?? null,
+      isHead: a.isHead ?? false,
+      isDeptHead: a.isDeptHead ?? false,
     }));
   }, [allAgentsWithSlug]);
 
@@ -868,7 +909,54 @@ function HomeInner() {
         </div>
       </header>
       <HealthBanner />
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className={`flex flex-1 overflow-hidden ${viewMode === "grid" ? "flex-row" : "flex-col"}`}>
+          {viewMode === "grid" ? (
+            /* ── Grid view: side-by-side layout ── */
+            <div className="flex min-h-0 flex-1 flex-col">
+              <HeadsView
+                heads={headAgents}
+                pinnedIds={quickViewPins}
+                hiddenIds={quickViewHidden}
+                allAgents={allQuickViewAgents}
+                tabOrder={tabs.filter((t) => t.kind === "1:1" && t.agentId).map((t) => t.agentId!)}
+                onChat={(agent) => {
+                  openOrFocus({
+                    id: agent.id,
+                    agentId: agent.id,
+                    deskId: agent.deskId,
+                    officeSlug: agent.officeSlug,
+                    kind: "1:1",
+                    label: agent.name,
+                  });
+                }}
+                onPin={pinAgent}
+                onUnpin={unpinAgent}
+                onReorder={(fromId, toId) => {
+                  reorder(fromId, toId);
+                }}
+                onSwitchView={() => {
+                  setViewMode("canvas");
+                  localStorage.setItem("ri-view-mode", "canvas");
+                }}
+                onSettings={() => setShowSettings((v) => !v)}
+                onOpenGroupchat={(label, groupchatId) => openGroupchat(label, groupchatId)}
+                onNewGroupchat={() => openGroupchat("New Groupchat")}
+              />
+              {/* Todos — bottom of left panel, compact */}
+              <div className="max-h-48 shrink-0 space-y-1.5 overflow-y-auto border-t border-white/10 px-3 py-1.5">
+                {order.map((slug) => (
+                  <OfficeTodos
+                    key={slug}
+                    officeSlug={slug}
+                    accent={offices[slug]?.theme?.accent}
+                    label={offices[slug]?.name}
+                    defaultCollapsed
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+          <>
           <main
             className="relative min-h-0 flex-1 overflow-hidden"
             ref={officeContainerRef}
@@ -895,14 +983,13 @@ function HomeInner() {
                 </svg>
               </button>
               </Tooltip>
-              <Tooltip label={viewMode === "canvas" ? "Switch to grid view" : "Switch to canvas view"} position="bottom">
+              <Tooltip label="Switch to grid view" position="bottom">
               <button
                 type="button"
-                onClick={() => setViewMode((v) => {
-                  const next = v === "canvas" ? "grid" : "canvas";
-                  localStorage.setItem("ri-view-mode", next);
-                  return next;
-                })}
+                onClick={() => {
+                  setViewMode("grid");
+                  localStorage.setItem("ri-view-mode", "grid");
+                }}
                 className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-900/80 text-gray-300 shadow-lg backdrop-blur-sm transition-colors hover:bg-gray-800 hover:text-white"
               >
                 <svg width="20" height="20" viewBox="0 0 16 16" shapeRendering="crispEdges">
@@ -963,7 +1050,7 @@ function HomeInner() {
               </Tooltip>
             </div>
             {/* To-do list — top-left, below toolbar (canvas view only) */}
-            {viewMode === "canvas" && focusedModule && (
+            {focusedModule && (
               <div className="pointer-events-auto absolute left-3 top-14 z-20 w-64">
                 <OfficeTodos
                   officeSlug={focusedModule}
@@ -971,30 +1058,6 @@ function HomeInner() {
                 />
               </div>
             )}
-            {viewMode === "grid" ? (
-              <HeadsView
-                heads={headAgents}
-                pinnedIds={quickViewPins}
-                allAgents={allQuickViewAgents}
-                tabOrder={tabs.filter((t) => t.kind === "1:1" && t.agentId).map((t) => t.agentId!)}
-                onChat={(agent) => {
-                  openOrFocus({
-                    id: agent.id,
-                    agentId: agent.id,
-                    deskId: agent.deskId,
-                    officeSlug: agent.officeSlug,
-                    kind: "1:1",
-                    label: agent.name,
-                  });
-                }}
-                onPin={pinAgent}
-                onUnpin={unpinAgent}
-                onReorder={(fromId, toId) => {
-                  // Reorder dock tabs to match card drag
-                  reorder(fromId, toId);
-                }}
-              />
-            ) : (<>
             <Station
               station={station}
               offices={offices}
@@ -1074,7 +1137,7 @@ function HomeInner() {
               );
             })}
 
-            {/* Office pill switcher — bottom-center of canvas */}
+            {/* Office pill switcher — bottom-center of canvas, drag to reorder */}
             <div className="pointer-events-auto absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/10 bg-black/60 px-2 py-1.5 backdrop-blur-sm">
               {order.map((slug, i) => {
                 const office = offices[slug];
@@ -1086,9 +1149,38 @@ function HomeInner() {
                 return (
                   <button
                     key={slug}
+                    draggable
+                    onDragStart={(e) => {
+                      pillDragIdx.current = i;
+                      e.dataTransfer.effectAllowed = "move";
+                      // Make the drag ghost semi-transparent
+                      if (e.currentTarget) {
+                        e.currentTarget.style.opacity = "0.4";
+                      }
+                    }}
+                    onDragEnd={(e) => {
+                      pillDragIdx.current = null;
+                      if (e.currentTarget) {
+                        e.currentTarget.style.opacity = "1";
+                      }
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      const from = pillDragIdx.current;
+                      if (from === null || from === i) return;
+                      // Swap in-place
+                      setOrder((prev) => {
+                        const next = [...prev];
+                        const [moved] = next.splice(from, 1);
+                        next.splice(i, 0, moved);
+                        return next;
+                      });
+                      pillDragIdx.current = i;
+                    }}
                     onClick={() => focusModule(slug)}
                     title={`${office.name} (${i + 1})`}
-                    className="flex items-center gap-1.5 rounded-full px-3 py-1 font-mono text-[10px] uppercase tracking-wider transition-all"
+                    className="flex cursor-grab items-center gap-1.5 rounded-full px-3 py-1 font-mono text-[10px] uppercase tracking-wider transition-all active:cursor-grabbing"
                     style={
                       active
                         ? { backgroundColor: accent + "22", color: accent, borderColor: accent + "55", border: "1px solid" }
@@ -1107,7 +1199,6 @@ function HomeInner() {
                 );
               })}
             </div>
-            </>)}
           </main>
           {hoverCard && (() => {
             const agent = agentByDesk.get(hoverCard.deskId);
@@ -1182,6 +1273,38 @@ function HomeInner() {
               void refetchRoster();
             }}
           />
+          </>
+          )}
+
+          {/* ── Grid view: dock as right-side panel ── */}
+          {viewMode === "grid" && (
+            <div className="flex h-full w-[380px] shrink-0 flex-col border-l border-white/10 bg-zinc-950">
+              <ChatDock
+                agents={allAgentsForDock}
+                rosterEntries={rosterEntries ?? []}
+                offices={offices}
+                deskRunStatus={deskRunStatus}
+                activeOfficeSlug={sidebarSlug}
+                layout="side"
+                onAckDesk={(deskId) => {
+                  const runId = runByDesk.get(deskId);
+                  if (runId) {
+                    void fetch(`/api/runs/${encodeURIComponent(runId)}/ack`, { method: "POST" })
+                      .then(() => refetchRoster())
+                      .catch(() => {});
+                  }
+                }}
+              />
+              <UsageTracker />
+              <PromptBar
+                agents={allAgentsWithSlug}
+                onSent={({ deskId, isReal }) => {
+                  if (isReal) selectDesk(deskId);
+                  void refetchRoster();
+                }}
+              />
+            </div>
+          )}
       </div>
       <CommandPalette
         slug={sidebarSlug}

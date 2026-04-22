@@ -1,0 +1,42 @@
+{
+  "id": "workspace",
+  "name": "Workspace",
+  "description": "Clean neutral workspace. No frills, good bones. The sensible default for any team that just needs a room.",
+  "tags": ["neutral", "clean", "medium", "default"],
+  "capacity": { "min": 3, "max": 6 },
+  "grid": { "cols": 17, "rows": 13 },
+  "tile": { "w": 48, "h": 48 },
+  "theme": {
+    "floor": "#404048",
+    "floorAlt": "#4a4a52",
+    "wall": "#2a2a32",
+    "deskTop": "#585860",
+    "deskSide": "#404048",
+    "accent": "#5aa0ff",
+    "highlight": "#88bbff",
+    "bg": "#1a2030",
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [4, 33],
+      "monitor": [10, 30]
+    },
+    "premadeRoom": {
+      "layers": ["ops_workspace_layer1.png"],
+      "pixelWidth": 272,
+      "pixelHeight": 208,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Main", "gridX": 1, "gridY": 1, "w": 15, "h": 10 }
+  ],
+  "desks": [
+    { "gridX": 8, "gridY": 3, "facing": "S", "label": "front center" },
+    { "gridX": 4, "gridY": 5, "facing": "S", "label": "mid left" },
+    { "gridX": 12, "gridY": 5, "facing": "S", "label": "mid right" },
+    { "gridX": 4, "gridY": 9, "facing": "S", "label": "back left" },
+    { "gridX": 8, "gridY": 9, "facing": "S", "label": "back center" },
+    { "gridX": 12, "gridY": 9, "facing": "S", "label": "back right" }
+  ]
+}

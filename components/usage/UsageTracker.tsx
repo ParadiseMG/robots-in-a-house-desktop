@@ -21,7 +21,7 @@ type Usage = {
   sevenDay: RateLimitWindow | null;
 };
 
-const POLL_MS = 15_000;
+import { USAGE_POLL_MS } from "@/lib/polling-constants";
 
 const fmtTokens = (n: number) => {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
@@ -81,7 +81,7 @@ export default function UsageTracker() {
       .then((r) => r.ok ? r.json() as Promise<Usage> : null)
       .then((json) => { if (json) setUsage(json); })
       .catch(() => {});
-  }, POLL_MS);
+  }, USAGE_POLL_MS);
 
   if (!usage) return null;
 

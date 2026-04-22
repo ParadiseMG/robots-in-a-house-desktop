@@ -13,7 +13,7 @@ type RunRow = {
   last_token_at: number | null;
 };
 
-type MeetingRow = {
+type GroupchatRow = {
   id: string;
   office_slug: string;
   prompt: string;
@@ -76,15 +76,16 @@ export async function GET() {
   // Detect synthesis runs (only relevant for done/error; awaiting_input can't be synthesis)
   const runIds = allRuns.map((r) => r.id);
   const placeholders = runIds.map(() => "?").join(",");
-  const synthesisMeetings = d
+  const synthesisGroupchats = d
     .prepare(
-      `SELECT id, office_slug, prompt, target_rounds, synthesis_run_id
-       FROM meetings
-       WHERE synthesis_run_id IN (${placeholders})`,
+      `SELECT g.id, t.office_slug, g.prompt, g.target_rounds, g.synthesis_run_id
+       FROM groupchats g
+       JOIN tasks t ON g.task_id = t.id
+       WHERE g.synthesis_run_id IN (${placeholders})`,
     )
-    .all(...runIds) as (MeetingRow & { synthesis_run_id: string })[];
-  const synthesisByRunId = new Map<string, MeetingRow>();
-  for (const m of synthesisMeetings) {
+    .all(...runIds) as (GroupchatRow & { synthesis_run_id: string })[];
+  const synthesisByRunId = new Map<string, GroupchatRow>();
+  for (const m of synthesisGroupchats) {
     synthesisByRunId.set(m.synthesis_run_id, m);
   }
 
@@ -120,21 +121,21 @@ export async function GET() {
       };
     }
 
-    const synthMeeting = synthesisByRunId.get(run.id);
+    const synthGroupchat = synthesisByRunId.get(run.id);
     const at = run.ended_at ?? run.started_at;
 
-    if (synthMeeting) {
+    if (synthGroupchat) {
       return {
         kind: "synthesis" as const,
         runId: run.id,
         status: run.status,
         at,
-        officeSlug: synthMeeting.office_slug,
-        meetingId: synthMeeting.id,
+        officeSlug: synthGroupchat.office_slug,
+        groupchatId: synthGroupchat.id,
         promptSnippet:
-          synthMeeting.prompt.length > 80
-            ? synthMeeting.prompt.slice(0, 80) + "…"
-            : synthMeeting.prompt,
+          synthGroupchat.prompt.length > 80
+            ? synthGroupchat.prompt.slice(0, 80) + "…"
+            : synthGroupchat.prompt,
       };
     }
 

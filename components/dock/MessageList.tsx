@@ -132,7 +132,7 @@ export default function MessageList({
     <div
       ref={scrollRef}
       onScroll={onScroll}
-      className="flex-1 overflow-y-auto space-y-2 p-2"
+      className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden space-y-2 p-2"
     >
       {messages === null ? (
         <div className="text-center text-xs text-white/30 pt-8">loading…</div>
@@ -152,7 +152,7 @@ export default function MessageList({
               }`}
             >
               <CopyButton text={m.text} />
-              <div className="whitespace-pre-wrap font-mono leading-relaxed">
+              <div className="whitespace-pre-wrap break-words font-mono leading-relaxed">
                 {m.text}
               </div>
               <div className="mt-0.5 text-right font-mono text-[9px] text-white/30">
@@ -167,7 +167,7 @@ export default function MessageList({
               key={`pending-${p.id}`}
               className="ml-8 rounded-lg rounded-tr-sm border border-amber-400/30 bg-amber-400/10 p-2 text-xs text-amber-100"
             >
-              <div className="whitespace-pre-wrap font-mono leading-relaxed">
+              <div className="whitespace-pre-wrap break-words font-mono leading-relaxed">
                 {p.text}
               </div>
               <div className="mt-0.5 flex items-center justify-between font-mono text-[9px]">
@@ -193,7 +193,7 @@ export default function MessageList({
           {/* Live assistant text */}
           {isLive && liveText && (
             <div className="mr-8 rounded-lg rounded-tl-sm border border-amber-400/30 bg-amber-400/5 p-2 text-xs text-white/90">
-              <div className="whitespace-pre-wrap font-mono leading-relaxed">
+              <div className="whitespace-pre-wrap break-words font-mono leading-relaxed">
                 {liveText}
               </div>
               <div className="mt-0.5 font-mono text-[9px] text-amber-300/60">

@@ -3,8 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import type { OfficeConfig } from "@/lib/office-types";
 import { withErrorReporting } from "@/lib/api-error-handler";
-import { isValidOfficeSlug } from "@/lib/config-loader";
-import { CONFIG_DIR } from "@/lib/data-paths";
+import { isValidOfficeSlug, invalidateOfficeCache } from "@/lib/config-loader";
 
 function isValidSlug(s: unknown): s is string {
   return typeof s === "string" && isValidOfficeSlug(s);
@@ -30,7 +29,7 @@ export const POST = withErrorReporting("POST /api/desks/move", async (req: Reque
     return NextResponse.json({ ok: false, error: "gridX and gridY must be numbers" }, { status: 400 });
   }
 
-  const configPath = path.join(CONFIG_DIR, `${officeSlug}.office.json`);
+  const configPath = path.join(process.cwd(), "config", `${officeSlug}.office.json`);
 
   let office: OfficeConfig;
   try {
@@ -63,6 +62,7 @@ export const POST = withErrorReporting("POST /api/desks/move", async (req: Reque
 
   try {
     await fs.writeFile(configPath, JSON.stringify(office, null, 2) + "\n", "utf-8");
+    invalidateOfficeCache(officeSlug);
   } catch {
     return NextResponse.json({ ok: false, error: "write failed" }, { status: 500 });
   }

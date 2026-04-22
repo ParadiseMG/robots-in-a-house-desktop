@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentConfig, DeskConfig, OfficeConfig } from "./office-types";
-import { isValidOfficeSlug as checkSlug, listOfficeSlugs } from "./config-loader";
-import { CONFIG_DIR, WORKSPACES_DIR } from "./data-paths";
+import { isValidOfficeSlug as checkSlug, listOfficeSlugs, invalidateOfficeCache } from "./config-loader";
 
 export type OfficeSlug = string;
 
@@ -29,7 +28,7 @@ function slugify(name: string): string {
 }
 
 function configPath(slug: OfficeSlug): string {
-  return path.join(CONFIG_DIR, `${slug}.office.json`);
+  return path.join(process.cwd(), "config", `${slug}.office.json`);
 }
 
 async function readOffice(slug: OfficeSlug): Promise<OfficeConfig> {
@@ -43,6 +42,7 @@ async function writeOffice(slug: OfficeSlug, office: OfficeConfig): Promise<void
     JSON.stringify(office, null, 2) + "\n",
     "utf-8",
   );
+  invalidateOfficeCache(slug);
 }
 
 async function listPremadeSprites(): Promise<string[]> {
@@ -220,7 +220,8 @@ export async function createAgent(
   await writeOffice(opts.officeSlug, office);
 
   const workspaceDir = path.join(
-    WORKSPACES_DIR,
+    process.cwd(),
+    "agent-workspaces",
     opts.officeSlug,
     id,
   );

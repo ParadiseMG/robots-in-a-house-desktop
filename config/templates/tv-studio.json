@@ -1,0 +1,46 @@
+{
+  "id": "tv-studio",
+  "name": "TV Studio",
+  "description": "Compact broadcast booth. Monitors, cameras, tight quarters. The war room for a tiny crew.",
+  "tags": ["tiny", "dark", "focused", "broadcast"],
+  "capacity": { "min": 1, "max": 3 },
+  "grid": { "cols": 11, "rows": 10 },
+  "tile": { "w": 48, "h": 48 },
+  "theme": {
+    "floor": "#282830",
+    "floorAlt": "#303040",
+    "wall": "#181820",
+    "deskTop": "#383840",
+    "deskSide": "#282830",
+    "accent": "#d04040",
+    "highlight": "#f06060",
+    "bg": "#101018",
+    "paletteFilter": {
+      "hue": -10,
+      "saturation": 0.9,
+      "brightness": 0.9,
+      "contrast": 1.1
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [4, 33],
+      "monitor": [12, 30]
+    },
+    "premadeRoom": {
+      "layers": ["dontcall_tv_studio_layer1.png", "dontcall_tv_studio_layer2.png"],
+      "pixelWidth": 176,
+      "pixelHeight": 160,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Studio", "gridX": 1, "gridY": 1, "w": 9, "h": 7 }
+  ],
+  "desks": [
+    { "gridX": 5, "gridY": 3, "facing": "S", "label": "anchor desk" },
+    { "gridX": 2, "gridY": 6, "facing": "S", "label": "camera left" },
+    { "gridX": 8, "gridY": 6, "facing": "S", "label": "camera right" }
+  ],
+  "preview": "dontcall_tv_studio_preview.png"
+}

@@ -1,0 +1,52 @@
+{
+  "id": "neon-lounge",
+  "name": "Neon Lounge",
+  "description": "Late-night neon glow. Dark floors, colored light spill. The after-hours office for teams that work weird hours.",
+  "tags": ["dark", "neon", "nightlife", "large"],
+  "capacity": { "min": 4, "max": 8 },
+  "grid": { "cols": 24, "rows": 18 },
+  "tile": { "w": 32, "h": 32 },
+  "theme": {
+    "floor": "#1a1a24",
+    "floorAlt": "#222230",
+    "wall": "#0e0e16",
+    "deskTop": "#2a2a38",
+    "deskSide": "#1a1a24",
+    "accent": "#e040e0",
+    "highlight": "#ff60ff",
+    "bg": "#0a0a14",
+    "paletteFilter": {
+      "hue": -15,
+      "saturation": 1.2,
+      "brightness": 0.95,
+      "contrast": 1.15,
+      "tint": "#a020d0",
+      "tintStrength": 0.08
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [4, 33],
+      "monitor": [12, 30]
+    },
+    "premadeRoom": {
+      "layers": ["dontcall_neon_lounge_layer1.png"],
+      "pixelWidth": 384,
+      "pixelHeight": 288,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Lounge", "gridX": 2, "gridY": 2, "w": 20, "h": 14 }
+  ],
+  "desks": [
+    { "gridX": 6, "gridY": 3, "facing": "S", "label": "front left" },
+    { "gridX": 12, "gridY": 3, "facing": "S", "label": "front center" },
+    { "gridX": 18, "gridY": 3, "facing": "S", "label": "front right" },
+    { "gridX": 5, "gridY": 8, "facing": "S", "label": "mid left" },
+    { "gridX": 12, "gridY": 8, "facing": "S", "label": "mid center" },
+    { "gridX": 19, "gridY": 8, "facing": "S", "label": "mid right" },
+    { "gridX": 7, "gridY": 13, "facing": "S", "label": "back left" },
+    { "gridX": 16, "gridY": 13, "facing": "S", "label": "back right" }
+  ]
+}

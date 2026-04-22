@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { db } from "@/server/db";
+import { db, getAllGroupchatMessages } from "@/server/db";
 
 export const dynamic = "force-dynamic";
 
-type MemberRow = { agent_id: string; office_slug: string; assignment_id: string };
+type MemberRow = { agent_id: string; office_slug: string; assignment_id: string; dropped: number; dropped_at: number | null; drop_reason: string | null };
 type GroupchatRow = {
   id: string;
   task_id: string;
@@ -49,7 +49,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   const memberRows = d
-    .prepare("SELECT agent_id, office_slug, assignment_id FROM groupchat_members WHERE groupchat_id = ?")
+    .prepare("SELECT agent_id, office_slug, assignment_id, dropped, dropped_at, drop_reason FROM groupchat_members WHERE groupchat_id = ?")
     .all(groupchatId) as MemberRow[];
 
   const SETTLED = new Set(["done", "error"]);
@@ -80,18 +80,24 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
       runStatus: latestRun?.status ?? "idle",
       tailSnippet: runs.at(-1)?.tailSnippet ?? null,
       runs,
+      dropped: !!row.dropped,
+      droppedAt: row.dropped_at ?? null,
+      dropReason: row.drop_reason ?? null,
     };
   });
 
   let roundsCompleted = 0;
   let currentRound = 0;
 
-  if (members.length > 0) {
+  // Only consider active (non-dropped) members for round settlement
+  const activeMembers = members.filter((a) => !a.dropped);
+
+  if (activeMembers.length > 0) {
     const maxRounds = Math.max(...members.map((a) => a.runs.length));
     currentRound = maxRounds;
 
     for (let r = maxRounds; r >= 1; r--) {
-      const allSettled = members.every((a) => {
+      const allSettled = activeMembers.every((a) => {
         const run = a.runs.find((run) => run.round === r);
         return run !== undefined && SETTLED.has(run.status);
       });
@@ -102,7 +108,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     }
   }
 
-  const allDone = members.every((a) => SETTLED.has(a.runStatus) || a.runStatus === "idle");
+  const allDone = activeMembers.every((a) => SETTLED.has(a.runStatus) || a.runStatus === "idle");
 
   let synthesis: { runId: string; status: string; text: string | null } | null = null;
   if (gc.synthesis_run_id) {
@@ -118,6 +124,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     }
   }
 
+  const userMessages = getAllGroupchatMessages(groupchatId);
+
   return NextResponse.json({
     groupchatId,
     convenedBy: gc.convened_by,
@@ -131,5 +139,6 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     targetRounds: gc.target_rounds ?? 1,
     members,
     synthesis,
+    userMessages,
   });
 }

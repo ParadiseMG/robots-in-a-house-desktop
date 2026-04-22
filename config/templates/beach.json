@@ -1,0 +1,53 @@
+{
+  "id": "beach",
+  "name": "Beach Office",
+  "description": "Tropical open-air workspace on the sand. Palm trees, ocean breeze, towel seating. Big enough for a full team.",
+  "tags": ["tropical", "bright", "open", "large"],
+  "capacity": { "min": 4, "max": 8 },
+  "grid": { "cols": 24, "rows": 16 },
+  "tile": { "w": 48, "h": 48 },
+  "theme": {
+    "floor": "#d4a96a",
+    "floorAlt": "#e8c080",
+    "wall": "#7ac8e0",
+    "deskTop": "#e8c880",
+    "deskSide": "#c2985a",
+    "accent": "#f5c842",
+    "highlight": "#fff5aa",
+    "bg": "#7ac8e0",
+    "paletteFilter": {
+      "hue": 12,
+      "saturation": 1.1,
+      "brightness": 1.05,
+      "contrast": 1
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [8, 33],
+      "monitor": [10, 30],
+      "chairType": "towel",
+      "towelColor": "#f59e0b"
+    },
+    "premadeRoom": {
+      "layers": ["paradise_beach_layer1.png"],
+      "pixelWidth": 384,
+      "pixelHeight": 256,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Beach", "gridX": 1, "gridY": 1, "w": 22, "h": 10 }
+  ],
+  "desks": [
+    { "gridX": 5, "gridY": 3, "facing": "S", "label": "front left" },
+    { "gridX": 12, "gridY": 1, "facing": "S", "label": "front center" },
+    { "gridX": 18, "gridY": 3, "facing": "S", "label": "front right" },
+    { "gridX": 5, "gridY": 7, "facing": "S", "label": "mid left" },
+    { "gridX": 11, "gridY": 5, "facing": "S", "label": "mid center" },
+    { "gridX": 16, "gridY": 6, "facing": "S", "label": "mid right" },
+    { "gridX": 8, "gridY": 8, "facing": "S", "label": "back left" },
+    { "gridX": 18, "gridY": 9, "facing": "S", "label": "back right" }
+  ],
+  "preview": "paradise_beach_layer1.png"
+}

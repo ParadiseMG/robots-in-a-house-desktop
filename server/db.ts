@@ -1,10 +1,9 @@
 import Database from "better-sqlite3";
-import { mkdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { OfficeConfig } from "../lib/office-types.js";
+import { loadOfficeConfig } from "../lib/config-loader";
 
-const DATA_ROOT = process.env.RIAH_DATA_DIR || process.cwd();
-const DB_DIR = join(DATA_ROOT, "data");
+const DB_DIR = join(process.cwd(), "data");
 const DB_PATH = join(DB_DIR, "robots.db");
 
 let _db: Database.Database | null = null;
@@ -81,25 +80,6 @@ function migrate(d: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_resets_agent ON session_resets(office_slug, agent_id, reset_at);
 
-    CREATE TABLE IF NOT EXISTS meetings (
-      id TEXT PRIMARY KEY,
-      office_slug TEXT NOT NULL,
-      task_id TEXT NOT NULL REFERENCES tasks(id),
-      convened_by TEXT NOT NULL,
-      prompt TEXT NOT NULL,
-      convened_at INTEGER NOT NULL,
-      target_rounds INTEGER NOT NULL DEFAULT 1,
-      synthesis_run_id TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_meetings_office ON meetings(office_slug, convened_at);
-
-    CREATE TABLE IF NOT EXISTS meeting_attendees (
-      meeting_id TEXT NOT NULL REFERENCES meetings(id),
-      agent_id TEXT NOT NULL,
-      assignment_id TEXT NOT NULL REFERENCES assignments(id),
-      PRIMARY KEY (meeting_id, agent_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_meeting_attendees_assignment ON meeting_attendees(assignment_id);
 
     CREATE TABLE IF NOT EXISTS groupchats (
       id TEXT PRIMARY KEY,
@@ -124,14 +104,16 @@ function migrate(d: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_groupchat_members_assignment ON groupchat_members(assignment_id);
 
-    CREATE TABLE IF NOT EXISTS groupchat_history (
+
+    CREATE TABLE IF NOT EXISTS groupchat_user_messages (
       id TEXT PRIMARY KEY,
       groupchat_id TEXT NOT NULL REFERENCES groupchats(id),
-      topic TEXT NOT NULL,
-      outcome TEXT,
-      created_at INTEGER NOT NULL
+      message TEXT NOT NULL,
+      sent_at INTEGER NOT NULL,
+      delivered_at INTEGER,
+      delivered_in_round INTEGER
     );
-    CREATE INDEX IF NOT EXISTS idx_groupchat_history ON groupchat_history(groupchat_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_groupchat_user_messages ON groupchat_user_messages(groupchat_id, sent_at);
 
     CREATE TABLE IF NOT EXISTS prompt_queue (
       id TEXT PRIMARY KEY,
@@ -216,16 +198,24 @@ function migrate(d: Database.Database) {
     "CREATE INDEX IF NOT EXISTS idx_runs_delegated_by ON agent_runs(delegated_by_agent_id, status)",
   );
 
-  // Idempotent column additions for meetings (pre-existing DBs)
-  const mcols = (
-    d.prepare("PRAGMA table_info(meetings)").all() as Array<{ name: string }>
+  // Idempotent column additions for groupchat_members
+  const gcMemCols = (
+    d.prepare("PRAGMA table_info(groupchat_members)").all() as Array<{ name: string }>
   ).map((r) => r.name);
-  if (!mcols.includes("target_rounds")) {
-    d.exec("ALTER TABLE meetings ADD COLUMN target_rounds INTEGER NOT NULL DEFAULT 1");
-  }
-  if (!mcols.includes("synthesis_run_id")) {
-    d.exec("ALTER TABLE meetings ADD COLUMN synthesis_run_id TEXT");
-  }
+  if (!gcMemCols.includes("dropped"))
+    d.exec("ALTER TABLE groupchat_members ADD COLUMN dropped INTEGER NOT NULL DEFAULT 0");
+  if (!gcMemCols.includes("dropped_at"))
+    d.exec("ALTER TABLE groupchat_members ADD COLUMN dropped_at INTEGER");
+  if (!gcMemCols.includes("drop_reason"))
+    d.exec("ALTER TABLE groupchat_members ADD COLUMN drop_reason TEXT");
+
+  // Drop legacy meetings system tables (replaced by groupchats)
+  d.exec("DROP TABLE IF EXISTS meeting_attendees");
+  d.exec("DROP TABLE IF EXISTS meetings");
+
+  // Drop truly unused tables (0 rows, no code references)
+  d.exec("DROP TABLE IF EXISTS groupchat_messages");
+  d.exec("DROP TABLE IF EXISTS groupchat_history");
 }
 
 export function upsertRateLimit(info: {
@@ -323,22 +313,10 @@ function seedIfEmpty(d: Database.Database) {
 }
 
 // ---- Helpers for config lookups (not persisted — offices are config-driven) ----
-// Read fresh from disk each call so newly-created agents are visible without a
-// server restart. Fall back to the bundled import if the file read fails.
-
-function loadOffice(officeSlug: string): OfficeConfig | null {
-  try {
-    const filePath = join(DATA_ROOT, "config", `${officeSlug}.office.json`);
-    if (!existsSync(filePath)) return null;
-    const raw = readFileSync(filePath, "utf-8");
-    return JSON.parse(raw) as OfficeConfig;
-  } catch {
-    return null;
-  }
-}
+// Uses cached loadOfficeConfig from config-loader (invalidated by fs.watch).
 
 export function getAgent(officeSlug: string, agentId: string) {
-  const office = loadOffice(officeSlug);
+  const office = loadOfficeConfig(officeSlug);
   if (!office) return null;
   const agent = office.agents.find((a) => a.id === agentId);
   if (!agent) return null;
@@ -346,7 +324,7 @@ export function getAgent(officeSlug: string, agentId: string) {
 }
 
 export function getDeskForAgent(officeSlug: string, agentId: string) {
-  const office = loadOffice(officeSlug);
+  const office = loadOfficeConfig(officeSlug);
   if (!office) return null;
   const agent = office.agents.find((a) => a.id === agentId);
   if (!agent) return null;
@@ -907,6 +885,33 @@ export function getToolApprovalByCallId(runId: string, toolCallId: string): Tool
 }
 
 // ---------------------------------------------------------------------------
+// Agent Activity (sparklines)
+// ---------------------------------------------------------------------------
+
+export type RecentRunRow = {
+  agent_id: string;
+  status: string;
+  started_at: number;
+  ended_at: number | null;
+};
+
+/**
+ * Returns the last N terminal runs per agent for a given office.
+ * Used for sparkline rendering in the grid view.
+ */
+export function recentRunsByOffice(officeSlug: string, limit = 8): RecentRunRow[] {
+  return db()
+    .prepare(
+      `SELECT agent_id, status, started_at, ended_at
+       FROM agent_runs
+       WHERE office_slug = ? AND status IN ('done', 'error', 'interrupted')
+       ORDER BY started_at DESC
+       LIMIT ?`,
+    )
+    .all(officeSlug, limit * 30) as RecentRunRow[]; // fetch enough rows, we'll group client-side
+}
+
+// ---------------------------------------------------------------------------
 // Office Todos
 // ---------------------------------------------------------------------------
 
@@ -974,4 +979,81 @@ export function updateTodo(
 export function deleteTodo(id: string): boolean {
   const result = db().prepare("DELETE FROM office_todos WHERE id = ?").run(id);
   return result.changes > 0;
+}
+
+// ── Groupchat user messages ────────────────────────────────────────────────────
+
+export type GroupchatUserMessage = {
+  id: string;
+  groupchatId: string;
+  message: string;
+  sentAt: number;
+  deliveredAt: number | null;
+  deliveredInRound: number | null;
+};
+
+type GcMsgRow = {
+  id: string;
+  groupchat_id: string;
+  message: string;
+  sent_at: number;
+  delivered_at: number | null;
+  delivered_in_round: number | null;
+};
+
+function rowToMsg(r: GcMsgRow): GroupchatUserMessage {
+  return {
+    id: r.id,
+    groupchatId: r.groupchat_id,
+    message: r.message,
+    sentAt: r.sent_at,
+    deliveredAt: r.delivered_at,
+    deliveredInRound: r.delivered_in_round,
+  };
+}
+
+/** Insert a new user message for a groupchat. Returns the inserted message id. */
+export function insertGroupchatMessage(groupchatId: string, message: string): string {
+  const id = `gcmsg_${crypto.randomUUID()}`;
+  db()
+    .prepare(
+      "INSERT INTO groupchat_user_messages (id, groupchat_id, message, sent_at) VALUES (?, ?, ?, ?)",
+    )
+    .run(id, groupchatId, message, Date.now());
+  return id;
+}
+
+/** Return all undelivered user messages for a groupchat, oldest first. */
+export function getPendingGroupchatMessages(groupchatId: string): GroupchatUserMessage[] {
+  return (
+    db()
+      .prepare(
+        "SELECT * FROM groupchat_user_messages WHERE groupchat_id = ? AND delivered_at IS NULL ORDER BY sent_at ASC",
+      )
+      .all(groupchatId) as GcMsgRow[]
+  ).map(rowToMsg);
+}
+
+/** Return all user messages for a groupchat (delivered + pending), oldest first. */
+export function getAllGroupchatMessages(groupchatId: string): GroupchatUserMessage[] {
+  return (
+    db()
+      .prepare(
+        "SELECT * FROM groupchat_user_messages WHERE groupchat_id = ? ORDER BY sent_at ASC",
+      )
+      .all(groupchatId) as GcMsgRow[]
+  ).map(rowToMsg);
+}
+
+/** Mark a list of message ids as delivered in the given round. */
+export function markGroupchatMessagesDelivered(ids: string[], round: number): void {
+  if (ids.length === 0) return;
+  const now = Date.now();
+  const stmt = db().prepare(
+    "UPDATE groupchat_user_messages SET delivered_at = ?, delivered_in_round = ? WHERE id = ?",
+  );
+  const tx = db().transaction(() => {
+    for (const id of ids) stmt.run(now, round, id);
+  });
+  tx();
 }

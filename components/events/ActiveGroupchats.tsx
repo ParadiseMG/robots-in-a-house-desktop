@@ -24,7 +24,7 @@ type Props = {
   onOpen: (groupchatId: string) => void;
 };
 
-const POLL_MS = 3000;
+import { ACTIVE_GROUPCHATS_POLL_MS } from "@/lib/polling-constants";
 
 function statusDot(status: string): string {
   if (status === "running" || status === "starting") return "#7dd3fc";
@@ -44,7 +44,7 @@ export default function ActiveGroupchats({ agentNames, officeNames, officeAccent
       .then((r) => r.ok ? r.json() as Promise<{ groupchats: GroupchatSummary[] }> : null)
       .then((j) => { if (j) setGroupchats(j.groupchats); })
       .catch(() => {});
-  }, POLL_MS);
+  }, ACTIVE_GROUPCHATS_POLL_MS);
 
   if (groupchats.length === 0) return null;
 

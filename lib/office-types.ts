@@ -74,7 +74,7 @@ export type RoomConfig = {
   h: number;
   groupchat?: { gridX: number; gridY: number };  // cell to render a groupchat click target
 };
-export type DeskConfig = { id: string; roomId: string; gridX: number; gridY: number; facing: "N" | "E" | "S" | "W" };
+export type DeskConfig = { id: string; roomId: string; gridX: number; gridY: number; facing: "N" | "E" | "S" | "W"; label?: string };
 export type AgentConfig = {
   id: string;
   deskId: string;
@@ -106,6 +106,46 @@ export type OfficeConfig = {
   rooms: RoomConfig[];
   desks: DeskConfig[];
   agents: AgentConfig[];
+};
+
+// ─── Room Templates ──────────────────────────────────────────────────────────
+// A RoomTemplate is a reusable office blueprint users can pick from a catalog.
+// It contains everything needed to instantiate a new office: room art, desk
+// layout, theme colors, and suggested capacity. No agents — those get assigned
+// when the user creates their office from the template.
+
+export type DeskSlot = {
+  /** Position on the grid */
+  gridX: number;
+  gridY: number;
+  facing: "N" | "E" | "S" | "W";
+  /** Optional label hint (e.g. "corner desk", "front row center") */
+  label?: string;
+};
+
+export type RoomTemplate = {
+  /** Unique template id, e.g. "japanese-lounge", "bunker", "beach" */
+  id: string;
+  /** Human-readable name shown in the picker */
+  name: string;
+  /** Short description of the room vibe */
+  description: string;
+  /** Tags for filtering: "cozy", "dark", "industrial", "tropical", etc. */
+  tags: string[];
+  /** How many desks this template supports */
+  capacity: { min: number; max: number };
+  /** Grid dimensions (in tiles) */
+  grid: { cols: number; rows: number };
+  /** Tile display size (pixels) — controls zoom level */
+  tile: { w: number; h: number };
+  /** Full theme config including premadeRoom layers */
+  theme: ThemeConfig;
+  /** Pre-placed rooms (zones within the office) */
+  rooms: Array<Omit<RoomConfig, "groupchat">>;
+  /** Pre-placed desk slots — users assign agents to these */
+  desks: DeskSlot[];
+  /** Preview image path relative to public/sprites/interiors/premade_rooms/ */
+  preview?: string;
 };
 
 export type StationBackground = {

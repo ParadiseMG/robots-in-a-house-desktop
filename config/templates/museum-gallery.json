@@ -1,0 +1,52 @@
+{
+  "id": "museum-gallery",
+  "name": "Museum Gallery",
+  "description": "Tall dark gallery with dramatic lighting. Moody and spacious. Vertical layout gives room to spread out.",
+  "tags": ["dark", "dramatic", "tall", "moody"],
+  "capacity": { "min": 3, "max": 7 },
+  "grid": { "cols": 17, "rows": 21 },
+  "tile": { "w": 32, "h": 32 },
+  "theme": {
+    "floor": "#2a2830",
+    "floorAlt": "#343240",
+    "wall": "#1a1820",
+    "deskTop": "#3a3840",
+    "deskSide": "#2a2830",
+    "accent": "#f59e0b",
+    "highlight": "#ffc04a",
+    "bg": "#121018",
+    "paletteFilter": {
+      "hue": -5,
+      "saturation": 0.85,
+      "brightness": 0.95,
+      "contrast": 1.1,
+      "tint": "#f59e0b",
+      "tintStrength": 0.06
+    },
+    "deskStyle": {
+      "tilesheet": "basement_16x16.png",
+      "chair": [4, 33],
+      "monitor": [12, 30]
+    },
+    "premadeRoom": {
+      "layers": ["dontcall_museum_room3_layer1.png", "dontcall_museum_room3_layer2.png"],
+      "pixelWidth": 272,
+      "pixelHeight": 336,
+      "sourceTileSize": 16,
+      "characterDepthIndex": 1
+    }
+  },
+  "rooms": [
+    { "id": "main", "name": "Gallery", "gridX": 1, "gridY": 1, "w": 15, "h": 18 }
+  ],
+  "desks": [
+    { "gridX": 8, "gridY": 3, "facing": "S", "label": "north center" },
+    { "gridX": 3, "gridY": 6, "facing": "S", "label": "west upper" },
+    { "gridX": 13, "gridY": 6, "facing": "S", "label": "east upper" },
+    { "gridX": 8, "gridY": 10, "facing": "S", "label": "mid center" },
+    { "gridX": 3, "gridY": 14, "facing": "S", "label": "west lower" },
+    { "gridX": 13, "gridY": 14, "facing": "S", "label": "east lower" },
+    { "gridX": 8, "gridY": 17, "facing": "S", "label": "south center" }
+  ],
+  "preview": "dontcall_museum_room3_preview.png"
+}
