@@ -25,6 +25,13 @@ process.env.PATH = [
   currentPath,
 ].join(":");
 
+// ---- Single instance lock ----------------------------------------------------
+// Prevent multiple instances from spawning (double-click, macOS retry, etc.)
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+}
+
 // ---- State -------------------------------------------------------------------
 let nextProcess: ChildProcess | null = null;
 let runnerProcess: ChildProcess | null = null;
@@ -496,6 +503,15 @@ function fireNotification(
 }
 
 // ---- App lifecycle -----------------------------------------------------------
+
+// When a second instance tries to launch, focus the existing window instead
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+});
 
 app.on("ready", async () => {
   console.log("[main] app ready — starting services…");
