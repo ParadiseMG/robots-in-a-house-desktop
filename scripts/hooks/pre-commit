@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Pre-commit hook: block secrets and sensitive files from being committed.
+# Install: git config core.hooksPath scripts/hooks
+
+set -euo pipefail
+
+# ── Blocked file patterns ──────────────────────────────────────────
+BLOCKED_FILES=(
+  '\.env$'
+  '\.env\.local$'
+  '\.env\.production$'
+  '\.pem$'
+  '\.key$'
+  'credentials\.json$'
+  'service-account.*\.json$'
+)
+
+# ── Blocked content patterns ───────────────────────────────────────
+BLOCKED_CONTENT=(
+  'sk-ant-[a-zA-Z0-9]{10,}'
+  'ANTHROPIC_API_KEY=[^#\n].*sk-'
+  'Bearer sk-ant-'
+  'api[_-]?key\s*[:=]\s*["'"'"'][a-zA-Z0-9]{20,}'
+  'password\s*[:=]\s*["'"'"'][^"'"'"']{8,}'
+  'secret\s*[:=]\s*["'"'"'][^"'"'"']{8,}'
+)
+
+ERRORS=0
+
+# Get staged files (added/modified only)
+STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+
+if [ -z "$STAGED" ]; then
+  exit 0
+fi
+
+# Check filenames
+for pattern in "${BLOCKED_FILES[@]}"; do
+  MATCHES=$(echo "$STAGED" | grep -E "$pattern" || true)
+  if [ -n "$MATCHES" ]; then
+    echo "BLOCKED: sensitive file staged for commit:"
+    echo "$MATCHES" | sed 's/^/  /'
+    ERRORS=1
+  fi
+done
+
+# Check file contents for secret patterns
+for file in $STAGED; do
+  # Skip binary files and files that no longer exist
+  [ -f "$file" ] || continue
+  file -b --mime "$file" 2>/dev/null | grep -q "text/" || continue
+
+  CONTENT=$(git diff --cached -- "$file" | grep '^+' | grep -v '^+++' || true)
+
+  for pattern in "${BLOCKED_CONTENT[@]}"; do
+    MATCH=$(echo "$CONTENT" | grep -E "$pattern" || true)
+    if [ -n "$MATCH" ]; then
+      echo "BLOCKED: potential secret in $file:"
+      echo "$MATCH" | head -3 | sed 's/^/  /'
+      ERRORS=1
+    fi
+  done
+done
+
+if [ "$ERRORS" -ne 0 ]; then
+  echo ""
+  echo "Commit rejected. If this is a false positive, use: git commit --no-verify"
+  exit 1
+fi
+
+exit 0
